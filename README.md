@@ -20,6 +20,8 @@ Pick the players you want to follow and add them to a simple **Notion kanban boa
 
 ![Send players to your Notion board (example data)](docs/notion.png)
 
+![Your Notion watchlist board (example data)](docs/notion-board.png)
+
 ## Start it (double-click)
 
 You need **Python 3.10+**. If it is missing, the launcher opens the download page (on Windows, tick *Add python.exe to PATH* while installing).
