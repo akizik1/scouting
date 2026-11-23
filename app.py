@@ -121,11 +121,13 @@ def filters_from_payload(f: dict) -> sf.SearchFilters:
             return None
     lst = lambda k: f[k] if isinstance(f.get(k), list) else sf._csv(f.get(k))
     return sf.SearchFilters(
-        title=f.get("title") or "Player search",
+        title=(f.get("title") or (f.get("description") or "")[:60].strip() or "Player search"),
+        description=f.get("description") or "", languages=lst("languages"),
+        only_lower_leagues=f.get("lower") == "only",
         positions=lst("positions"), age_min=num("age_min", int), age_max=num("age_max", int),
         foot=f.get("foot") or None, max_value_eur=num("max_value"), min_value_eur=num("min_value"),
         leagues=lst("leagues"), nationalities=lst("nationalities"),
-        include_lower_leagues=bool(f.get("lower")), min_minutes=num("min_minutes", int),
+        include_lower_leagues=f.get("lower") in (True, "also", "only"), min_minutes=num("min_minutes", int),
         min_height_cm=num("min_height", int), contract_ends_by=f.get("contract_by") or None,
         criteria=f.get("criteria") or "", must_haves=f.get("must_haves") or "")
 
@@ -139,7 +141,7 @@ def run_search(job: dict, payload: dict) -> None:
                                    "(or pick Ollama / Claude).")
             f = filters_from_payload(payload.get("filters", {}))
             job["filters"] = f.model_dump()
-            top = max(1, min(int(payload.get("top") or 5), 10))
+            top = max(1, min(int(payload.get("top") or 10), 15))
             players = sf._csv(payload.get("players"))
             briefs = sf.run_search(sf.make_client(), f, top, players, on_step=lambda t: step(job, t))
             job["briefs"] = [b.model_dump() for b in briefs]

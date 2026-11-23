@@ -54,6 +54,7 @@ FOUND_IN = Literal["Transfermarkt", "FotMob", "Sofascore", "Ogol", "Wikipedia",
 # --------------------------------------------------------------------------
 class SearchFilters(BaseModel):
     title: str = "Player search"
+    description: str = ""                      # the scout's request in plain words
     positions: list[str] = []
     age_min: Optional[int] = None
     age_max: Optional[int] = None
@@ -62,7 +63,9 @@ class SearchFilters(BaseModel):
     min_value_eur: Optional[float] = None
     leagues: list[str] = []
     nationalities: list[str] = []
+    languages: list[str] = []                  # languages the player speaks
     include_lower_leagues: bool = False
+    only_lower_leagues: bool = False
     min_minutes: Optional[int] = None          # this season
     min_height_cm: Optional[int] = None
     contract_ends_by: Optional[str] = None     # YYYY or YYYY-MM-DD
@@ -71,6 +74,9 @@ class SearchFilters(BaseModel):
 
     def describe(self) -> str:
         p = [f"Search: {self.title}"]
+        if self.description.strip():
+            p.append("The scout's request, in their own words (treat every requirement in it as "
+                     f"a filter): {self.description.strip()}")
         if self.positions:
             p.append("Position: " + " / ".join(self.positions))
         if self.age_min or self.age_max:
@@ -83,10 +89,14 @@ class SearchFilters(BaseModel):
             p.append(f"Market value: {lo} to {hi}")
         if self.leagues:
             p.append("Leagues / countries to search: " + ", ".join(self.leagues))
-        if self.include_lower_leagues:
+        if self.only_lower_leagues:
+            p.append("ONLY lower divisions: second tier and below. Skip top-flight players")
+        elif self.include_lower_leagues:
             p.append("Also search lower / cheaper divisions")
         if self.nationalities:
             p.append("Nationality: " + ", ".join(self.nationalities))
+        if self.languages:
+            p.append("Speaks: " + ", ".join(self.languages))
         if self.min_minutes:
             p.append(f"Minimum minutes this season: {self.min_minutes}")
         if self.min_height_cm:
@@ -128,6 +138,20 @@ class Fixture(BaseModel):
     source_url: Optional[str] = None
 
 
+class CareerStep(BaseModel):
+    club: str
+    from_year: Optional[str] = None
+    to_year: Optional[str] = None      # null = current club
+    apps: Optional[int] = None
+    goals: Optional[int] = None
+    loan: bool = False
+
+
+class ValuePoint(BaseModel):
+    date: str                          # YYYY-MM or YYYY-MM-DD
+    value_eur: float
+
+
 class PlayerBrief(BaseModel):
     name: str
     club: str
@@ -154,6 +178,17 @@ class PlayerBrief(BaseModel):
     signal_reason: str
     next_fixture: Optional[Fixture] = None
     all_sources: list[str]
+    languages: list[str] = []
+    profile_links: list[str] = []      # player pages: Transfermarkt, FotMob, Sofascore, club
+    agent: Optional[str] = None        # agent / agency, as listed publicly
+    agent_url: Optional[str] = None
+    club_website: Optional[str] = None
+    club_email: Optional[str] = None   # official club contact only
+    club_phone: Optional[str] = None
+    contact_source: Optional[str] = None
+    career: list[CareerStep] = []      # clubs and years, youth to now
+    value_history: list[ValuePoint] = []
+    value_history_source: Optional[str] = None
 
 
 # --------------------------------------------------------------------------
@@ -421,9 +456,17 @@ class Queries(BaseModel):
     queries: list[str]
 
 
-def clean_sources(b: PlayerBrief, read: list[str]) -> PlayerBrief:
+def clean_sources(b: PlayerBrief, read: list[str], notes: str = "") -> PlayerBrief:
     """Free models may invent links: keep only URLs we really read, recount sources."""
     ok = set(read)
+
+    def seen(v):  # a URL / email / phone is kept only if it appears in what we read
+        return v if v and (v in ok or v in notes) else None
+    b.profile_links = [u for u in b.profile_links if seen(u)]
+    if not seen(b.value_history_source) or len(b.value_history) < 2:
+        b.value_history, b.value_history_source = [], None
+    for attr in ("agent_url", "club_website", "club_email", "club_phone", "contact_source"):
+        setattr(b, attr, seen(getattr(b, attr)))
     for c in b.strengths + b.risks:
         c.sources = [u for u in c.sources if u in ok]
         c.source_count = min(c.source_count, len(c.sources))
@@ -474,7 +517,10 @@ def free_brief_player(llm: FreeLLM, f: SearchFilters, name: str, club: str = "")
         f"{who} scouting report",
         f"{name} reddit OR forum",
         f"{who} next match",
-    ], llm.budget, per_query=4, max_pages=9)
+        f"{name} player agent agency",
+        f"{club or name} football club official website contact",
+        f"{name} career clubs market value history",
+    ], llm.budget, per_query=4, max_pages=12)
     if not notes:
         raise RuntimeError(f"No public pages found for {name}.")
     b = llm.ask(f"""Today is {today}. Build a scouting brief for {who} against these filters,
@@ -497,11 +543,18 @@ the sources. Unknown -> null / "NO DATA".
    small sample or key data missing), "🔴 Skip" (clearly fails a core filter). 2-3 sentence
    signal_reason.
 8. all_sources: the URLs you used.
+9. profile_links: the source URLs that are his player pages (Transfermarkt, FotMob, Sofascore,
+   club site). languages if a source states them. agent / agent_url as a source lists them
+   (e.g. Transfermarkt "Player agent"). club_website, club_email, club_phone ONLY if they
+   appear in the sources (official club contact); contact_source = that URL. Never guess.
+10. career: each club with from_year / to_year (null if current), apps, goals, loan, oldest first,
+    only as the sources list it. value_history: dated market values (oldest first) ONLY if a
+    source lists them, with value_history_source = that URL. Otherwise leave both empty.
 
 <sources>
 {notes}
 </sources>""", PlayerBrief)
-    return clean_sources(b, read)
+    return clean_sources(b, read, notes)
 
 
 def find_candidates(client, f: SearchFilters, n: int) -> CandidateList:
@@ -545,6 +598,12 @@ Build a scouting brief for {who} against these filters:
 4. "What to watch on video": 3-5 concrete things to check in his next match, linked to
    the risks and the must-haves.
 5. Next official fixture (date, opponent, competition, where it can be watched), if found.
+5b. Links and contact: his profile pages (Transfermarkt, FotMob, Sofascore, club page), languages
+   he speaks if stated, his agent / agency as publicly listed (e.g. Transfermarkt "Player agent")
+   with its page, and the club's official website and public contact email / phone.
+   Only official public contact details; never guess an email.
+5c. Career: every club (youth, senior, loans) with years, apps and goals if listed.
+   Market value history: dated values (e.g. Transfermarkt market value history) with the page.
 6. Data quality: Good / Thin / Very thin, and exactly what is missing.
 7. Signal: 🟢 Watch now (passes most filters, reasonable sample ≥ ~450 min),
    🟡 Monitor (mixed, small sample or key data missing), 🔴 Skip (clearly fails a core
@@ -562,7 +621,7 @@ def run_search(client, f: SearchFilters, top: int = 5, players: Optional[list[st
         targets = [(p, "") for p in players]
     else:
         step("Searching the web (Transfermarkt, FotMob, Sofascore, league sites) for players who pass the filters")
-        cl = find_candidates(client, f, max(top * 2, 6))
+        cl = find_candidates(client, f, min(max(top + 5, 8), 20))
         targets = [(c.name, c.club) for c in cl.candidates[:top]]
         if not targets:
             raise RuntimeError("No players passed the filters. Try wider filters.")
@@ -716,6 +775,15 @@ def brief_blocks(b: PlayerBrief) -> list[dict]:
         h("🕳️ Data gaps"),
         {"type": "paragraph", "paragraph": {"rich_text": rt(b.data_gaps or "—")}},
     ]
+    if b.career:
+        blocks.append(h("🏟️ Career"))
+        blocks += [{"type": "bulleted_list_item", "bulleted_list_item": {"rich_text": rt(career_text(c))}}
+                   for c in b.career[:20]]
+    contact = contact_lines(b)
+    if contact:
+        blocks.append(h("📇 Links & contact"))
+        blocks += [{"type": "bulleted_list_item", "bulleted_list_item": {"rich_text": rt(t, u)}}
+                   for t, u in contact]
     srcs = [u for u in b.all_sources if valid_url(u)][:40]
     if srcs:
         blocks.append({"type": "toggle", "toggle": {
@@ -723,6 +791,28 @@ def brief_blocks(b: PlayerBrief) -> list[dict]:
             "children": [{"type": "bulleted_list_item",
                           "bulleted_list_item": {"rich_text": rt(u, u)}} for u in srcs]}})
     return blocks
+
+
+def career_text(c: CareerStep) -> str:
+    yrs = f"{c.from_year or '?'}–{c.to_year or 'now'}"
+    extra = ", ".join(x for x in [f"{c.apps} apps" if c.apps is not None else "",
+                                  f"{c.goals} goals" if c.goals is not None else "",
+                                  "loan" if c.loan else ""] if x)
+    return f"{yrs} · {c.club}" + (f" ({extra})" if extra else "")
+
+
+def contact_lines(b: PlayerBrief) -> list[tuple[str, Optional[str]]]:
+    """(text, link) rows for profile pages, agent and club contact."""
+    out = [(f"Profile: {u}", u) for u in b.profile_links if valid_url(u)][:4]
+    if b.agent:
+        out.append((f"Agent: {b.agent}", valid_url(b.agent_url)))
+    if b.club_website:
+        out.append((f"Club website: {b.club_website}", valid_url(b.club_website)))
+    if b.club_email:
+        out.append((f"Club email: {b.club_email}", None))
+    if b.club_phone:
+        out.append((f"Club phone: {b.club_phone}", None))
+    return out
 
 
 def next_step_text(b: PlayerBrief) -> str:
@@ -785,6 +875,8 @@ def to_markdown(f: SearchFilters, briefs: list[PlayerBrief]) -> str:
         out += [f"- {c.text} _[{c.confidence}, {c.source_count} src]_ "
                 + " ".join(f"[↗]({u})" for u in c.sources[:3]) for c in b.risks]
         out += ["", "**What to watch on video**"] + [f"- [ ] {w}" for w in b.watch_on_video]
+        out += ["", "**Career**"] + [f"- {career_text(c)}" for c in b.career]
+        out += ["", "**Links & contact**"] + [f"- {t}" for t, _ in contact_lines(b)]
         out += ["", f"**Next step:** {next_step_text(b)}", f"**Data gaps:** {b.data_gaps}", ""]
     return "\n".join(out)
 
