@@ -21,7 +21,7 @@ body{background:radial-gradient(1200px 600px at 80% -10%,#12324a55,transparent),
 button,input,select,textarea{font:inherit;color:inherit}
 a{color:var(--blue);text-decoration:none}
 /* header */
-header{display:flex;align-items:center;gap:14px;padding:16px 28px;border-bottom:1px solid var(--line);
+header{display:flex;align-items:center;gap:14px;padding:10px 28px;border-bottom:1px solid var(--line);
   background:rgba(11,17,24,.75);backdrop-filter:blur(10px);position:sticky;top:0;z-index:5}
 .logo{width:38px;height:38px;border-radius:11px;background:linear-gradient(135deg,var(--accent),#1a9c57);
   display:grid;place-items:center;box-shadow:0 6px 18px #3ddc8444}
@@ -142,11 +142,11 @@ details ul{margin:8px 0;padding-left:18px;font-size:12.5px;color:#c3cfdd}
 .hist span{display:block;color:var(--muted);font-size:12px}
 .toast{position:fixed;bottom:22px;left:50%;transform:translateX(-50%);background:var(--text);color:#0b1118;padding:10px 16px;border-radius:10px;font-weight:600;z-index:30;box-shadow:var(--shadow)}
 /* ---------- layout v2: search on top, filters spread out, results below ---------- */
-main{display:block;max-width:1440px;margin:0 auto;padding:24px 28px 60px}
-.search{padding:18px 20px;margin-bottom:16px}
+main{display:block;max-width:1440px;margin:0 auto;padding:16px 28px 60px}
+.search{padding:14px 18px;margin-bottom:12px}
 .search h2{margin-bottom:10px}
-.sbox textarea{min-height:84px;font-size:15px;line-height:1.5;padding:14px 16px;border-radius:12px}
-.sbar{display:flex;flex-wrap:wrap;align-items:center;gap:12px;margin-top:12px}
+.sbox textarea{min-height:56px;height:56px;font-size:15px;line-height:1.5;padding:14px 16px;border-radius:12px}
+.sbar{display:flex;flex-wrap:wrap;align-items:center;gap:12px;margin-top:10px}
 .sbar .sp{flex:1}
 .sbar .seg{margin:0}
 .sbar .seg button{flex:none;padding:7px 14px}
@@ -157,7 +157,22 @@ main{display:block;max-width:1440px;margin:0 auto;padding:24px 28px 60px}
 .fhead2 h2{margin:0}.fhead2 .sp{flex:1}
 .linkbtn{background:none;border:0;color:var(--blue);cursor:pointer;font-weight:600;font-size:12px;padding:4px}
 .linkbtn:hover{text-decoration:underline}
-.fgrid{display:grid;grid-template-columns:repeat(auto-fill,minmax(300px,1fr));gap:14px;margin-bottom:22px}
+.filters{padding:14px 18px 16px;margin-bottom:22px}
+.filters .fhead2{margin:0 0 10px}
+.filters .opt{text-transform:none;letter-spacing:0;font-weight:500;color:var(--dim);margin-left:6px}
+.fgrid{display:grid;grid-template-columns:repeat(6,1fr);gap:10px 14px}
+.field{min-width:0}
+.field label{margin:0 0 5px;display:flex;align-items:center;font-size:11.5px}
+.field.c2{grid-column:span 2}.field.c3{grid-column:span 3}
+@media(max-width:1100px){.fgrid{grid-template-columns:repeat(4,1fr)}}
+@media(max-width:700px){.fgrid{grid-template-columns:1fr 1fr}.field.c2,.field.c3{grid-column:span 2}}
+.filters input[type=text],.filters input[type=number],.filters select{padding:7px 10px;font-size:13px;height:36px}
+.filters .tags{min-height:36px;padding:3px 6px;flex-wrap:nowrap;overflow-x:auto}
+.filters .tags input{min-width:60px;height:auto}
+.filters .seg{padding:3px;height:36px}.filters .seg button{padding:4px 6px;font-size:12px}
+.filters .row{gap:6px}
+.posrow{display:flex;flex-wrap:wrap;gap:5px}
+.posrow .chip{padding:7px 0;border-radius:8px;flex:1;min-width:34px;text-align:center;font-size:11.5px}
 .tile{background:var(--card);border:1px solid var(--line);border-radius:var(--radius);padding:14px 16px 16px}
 .tile .gt{font-size:11px;text-transform:uppercase;letter-spacing:1.1px;color:var(--dim);font-weight:700;margin-bottom:8px}
 .tile label:first-of-type{margin-top:0}
@@ -218,7 +233,7 @@ main{display:block;max-width:1440px;margin:0 auto;padding:24px 28px 60px}
 <body>
 <header>
   <div class="logo"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="#06240f" stroke-width="2.2" stroke-linecap="round"><circle cx="11" cy="11" r="7"/><path d="M21 21l-4.3-4.3"/><path d="M11 8v6M8 11h6"/></svg></div>
-  <div class="brand"><b>Scout Finder</b><span>Find the right players, fast.</span></div>
+  <div class="brand"><b>Scout Finder</b><span>Set your filters, find players, add the ones you like straight to your Notion board.</span></div>
   <div class="sp"></div>
   <button class="iconbtn" id="histBtn">🕘 Saved searches</button>
   <button class="iconbtn" id="setBtn"><span class="dot" id="keyDot"></span> Settings</button>
@@ -232,70 +247,51 @@ main{display:block;max-width:1440px;margin:0 auto;padding:24px 28px 60px}
     <div class="sbar">
       <span class="lbl">Show the top</span>
       <div class="seg" id="topSeg"><button data-t="5">5</button><button data-t="10" class="on">10</button><button data-t="15">15</button></div>
-      <span class="active"><b id="activeN">0</b> extra filters · <button class="linkbtn" id="resetBtn">Reset all</button></span>
+      <span class="active"><b id="activeN">0</b> filters set</span>
       <div class="sp"></div>
       <span class="active" id="eta">≈ 5–10 min</span>
       <button class="primary" id="runBtn">Find players</button>
     </div>
   </section>
 
-  <!-- 2. filters, spread out -->
-  <div class="fhead2"><h2>Filters <span style="text-transform:none;letter-spacing:0;font-weight:500">(optional, the text above is enough)</span></h2><div class="sp"></div>
-    <button class="linkbtn" id="toggleF">Hide filters</button></div>
-  <section class="fgrid" id="formPanel">
-    <div class="tile"><div class="gt">Position</div><div class="posgrid" id="posGrid"></div></div>
+  <!-- 2. all filters on one screen -->
+  <section class="panel filters" id="formPanel">
+    <div class="fhead2"><h2>Filters <span class="opt">optional · the text above is enough</span></h2><div class="sp"></div>
+      <button class="linkbtn" id="resetBtn">Reset all</button></div>
+    <div class="fgrid">
+      <div class="field c3"><label>Position</label><div class="posrow" id="posGrid"></div></div>
+      <div class="field"><label>Age</label><div class="row"><input type="number" id="fAgeMin" placeholder="Min"><input type="number" id="fAgeMax" placeholder="Max"></div></div>
+      <div class="field"><label>Min value</label><div class="unit"><input type="number" id="fMinVal" placeholder="Any" step="50"><span>k €</span></div></div>
+      <div class="field"><label>Max value</label>
+        <select id="fMaxSel"><option value="">Any</option><option value="250">€250k</option><option value="500">€500k</option><option value="1000">€1M</option><option value="3000">€3M</option><option value="10000">€10M</option></select></div>
 
-    <div class="tile"><div class="gt">Age</div>
-      <div class="row"><div class="unit"><input type="number" id="fAgeMin" placeholder="Min"><span>yrs</span></div>
-        <div class="unit"><input type="number" id="fAgeMax" placeholder="Max"><span>yrs</span></div></div>
-      <div class="quick" id="ageQuick"><button class="chip" data-a="19">U19</button><button class="chip" data-a="21">U21</button><button class="chip" data-a="23">U23</button><button class="chip" data-a="">Any</button></div>
-      <div class="gt" style="margin-top:14px">Budget · market value</div>
-      <div class="row"><div class="unit"><input type="number" id="fMinVal" placeholder="Min" step="50"><span>k €</span></div>
-        <div class="unit"><input type="number" id="fMaxVal" placeholder="Max" step="50"><span>k €</span></div></div>
-      <div class="quick" id="valQuick"><button class="chip" data-v="250">≤ €250k</button><button class="chip" data-v="500">≤ €500k</button><button class="chip" data-v="1000">≤ €1M</button><button class="chip" data-v="3000">≤ €3M</button><button class="chip" data-v="">Any</button></div>
-    </div>
+      <div class="field c2"><label>Leagues / countries</label>
+        <div class="tags" id="leagueTags"><input type="text" list="dlLeagues" placeholder="e.g. Brazil, Portugal Liga 2"></div></div>
+      <div class="field c2"><label>Divisions</label>
+        <div class="seg small" id="lowerSeg"><button data-l="" class="on">Top only</button><button data-l="also">+ Lower</button><button data-l="only">Only lower</button></div></div>
+      <div class="field"><label>Nationality</label><div class="tags" id="natTags"><input type="text" placeholder="Any"></div></div>
+      <div class="field"><label>Languages</label><div class="tags" id="langTags"><input type="text" list="dlLangs" placeholder="Any"></div></div>
 
-    <div class="tile"><div class="gt">Leagues / countries</div>
-      <div class="tags" id="leagueTags"><input type="text" placeholder="Type and press Enter"></div>
-      <div class="quick" id="leagueQuick"></div>
-      <div class="gt" style="margin-top:14px">Divisions</div>
-      <div class="seg small" id="lowerSeg"><button data-l="" class="on">Top only</button><button data-l="also">+ Lower</button><button data-l="only">Only lower</button></div>
-    </div>
+      <div class="field"><label>Foot</label>
+        <div class="seg small" id="footSeg"><button data-f="Any" class="on">Any</button><button data-f="Left">Left</button><button data-f="Right">Right</button></div></div>
+      <div class="field"><label>Min height</label><div class="unit"><input type="number" id="fHeight" placeholder="Any"><span>cm</span></div></div>
+      <div class="field"><label>Contract ends by</label><select id="fContract"><option value="">Any</option><option>2026</option><option>2027</option><option>2028</option></select></div>
+      <div class="field"><label>Minutes this season</label><select id="fMinutes"><option value="">Any</option><option value="450">450+</option><option value="900">900+</option><option value="1500">1,500+</option></select></div>
+      <div class="field c2"><label>Stat thresholds</label><input type="text" id="fCriteria" list="dlCrit" placeholder="G+A per 90 ≥ 0.4; dribble success ≥ 50%"></div>
 
-    <div class="tile"><div class="gt">Nationality</div>
-      <div class="tags" id="natTags"><input type="text" placeholder="Any nationality"></div>
-      <div class="gt" style="margin-top:14px">Languages spoken</div>
-      <div class="tags" id="langTags"><input type="text" placeholder="Any language"></div>
-      <div class="quick" id="langQuick"></div>
+      <div class="field c2"><label>Style, checked on video</label><input type="text" id="fMust" placeholder="Pace in transition, presses"></div>
+      <div class="field c2"><label>Brief specific players</label><input type="text" id="fPlayers" placeholder="Names, comma separated"></div>
+      <div class="field c2"><label>Your own filters <button class="linkbtn" id="addCustom" style="margin-left:4px">＋ Add filter</button></label>
+        <div class="tags" id="customTags"><input type="text" placeholder="e.g. EU passport · press Enter"></div></div>
     </div>
-
-    <div class="tile"><div class="gt">Profile</div>
-      <label>Preferred foot</label>
-      <div class="seg small" id="footSeg"><button data-f="Any" class="on">Any</button><button data-f="Left">Left</button><button data-f="Right">Right</button></div>
-      <div class="row">
-        <div><label>Min height</label><div class="unit"><input type="number" id="fHeight" placeholder="Any"><span>cm</span></div></div>
-        <div><label>Contract ends by</label><select id="fContract"><option value="">Any</option><option>2026</option><option>2027</option><option>2028</option></select></div>
-      </div>
-      <label>Minutes this season</label>
-      <div class="quick" id="minQuick" style="margin-top:0"><button class="chip on" data-m="">Any</button><button class="chip" data-m="450">450+</button><button class="chip" data-m="900">900+</button><button class="chip" data-m="1500">1,500+</button></div>
-    </div>
-
-    <div class="tile"><div class="gt">Performance</div>
-      <label>Stat thresholds</label>
-      <textarea id="fCriteria" placeholder="G+A per 90 ≥ 0.4; dribble success ≥ 50%"></textarea>
-      <div class="quick" id="critQuick"></div>
-      <label>Style, checked on video</label>
-      <textarea id="fMust" placeholder="Pace in transition, presses, works without the ball"></textarea>
-      <label>Or brief specific players</label>
-      <input type="text" id="fPlayers" placeholder="Names, comma separated">
-    </div>
+    <datalist id="dlLeagues"></datalist><datalist id="dlLangs"></datalist><datalist id="dlCrit"></datalist>
   </section>
 
   <!-- 3. results -->
   <section id="results">
     <div id="vEmpty" class="panel hero">
       <h1>Find the right players, fast.</h1>
-      <p>Describe who you need and press Find players.</p>
+      <p>1. Describe the player or set filters · 2. Find players · 3. Click ＋ Watchlist to send them to your Notion board.</p>
       <div class="flow">
         <div><i>✍️</i><b>Describe</b><span>Plain words, or the filters</span></div>
         <div><i>🔎</i><b>Find</b><span>Transfermarkt, FotMob, Sofascore, Ogol</span></div>
@@ -394,15 +390,15 @@ function toast(t){const d=document.createElement("div");d.className="toast";d.te
 /* ---------- filter state ---------- */
 let foot="Any", lower="", topN=10, minMinutes="", positions=new Set(), added={}, current=null, settings={}, sigFilter="all";
 const POS_GROUPS = [["Goal & defence",["GK","CB","RB","LB","RWB","LWB"]],["Midfield",["DM","CM","AM"]],["Attack",["RW","LW","SS","ST"]]];
-$("#posGrid").innerHTML = POS_GROUPS.map(([g,ps]) => `<div class="lbl">${g}</div>` + ps.map(p=>`<button class="chip" data-p="${p}">${p}</button>`).join("")).join("");
+$("#posGrid").innerHTML = POS_GROUPS.flatMap(([g,ps]) => ps).map(p=>`<button class="chip" data-p="${p}">${p}</button>`).join("");
 $("#posGrid").onclick = e => { const p=e.target.dataset.p; if(!p) return; positions.has(p)?positions.delete(p):positions.add(p); e.target.classList.toggle("on"); count(); };
 
 const LEAGUES = ["Brazil Série A","Brazil Série B","Brazil Série C","Argentina Primera","Argentina Primera Nacional","Colombia Primera A","Ghana","Nigeria","Senegal","Portugal Liga 2","Belgium 2nd tier","Netherlands Eerste Divisie","Denmark Superliga","Norway Eliteserien","Austria Bundesliga"];
 const LANGS = ["English","Spanish","Portuguese","French","German","Italian","Turkish","Arabic"];
 const CRIT = ["G+A per 90 ≥ 0.4","Dribble success ≥ 50%","Avg rating ≥ 7.0","Key passes per 90 ≥ 1.5","Pass accuracy ≥ 80%","Tackles + interceptions per 90 ≥ 3","Aerial duels won ≥ 55%"];
-$("#critQuick").innerHTML = CRIT.map(c=>`<button class="chip" data-c="${esc(c)}">+ ${esc(c)}</button>`).join("");
-$("#critQuick").onclick = e => { const c=e.target.dataset.c; if(!c) return; const t=$("#fCriteria");
-  if(t.value.includes(c)) return; t.value = (t.value.trim() ? t.value.trim().replace(/;?$/,"; ") : "") + c; count(); };
+$("#dlLeagues").innerHTML = LEAGUES.map(l=>`<option value="${esc(l)}">`).join("");
+$("#dlLangs").innerHTML = LANGS.map(l=>`<option value="${esc(l)}">`).join("");
+$("#dlCrit").innerHTML = CRIT.map(l=>`<option value="${esc(l)}">`).join("");
 
 function tagBox(id, quickId, list){
   const box=$(id), input=box.querySelector("input"), vals=[];
@@ -410,6 +406,7 @@ function tagBox(id, quickId, list){
     vals.forEach((v,i)=>{ const t=document.createElement("span"); t.className="tagx"; t.innerHTML=`${esc(v)}<button data-i="${i}">×</button>`; box.insertBefore(t,input); });
     if(quickId) $$(quickId+" .chip").forEach(c=>c.classList.toggle("on", vals.includes(c.dataset.l))); count(); };
   const add=v=>{ v=v.trim(); if(v && !vals.includes(v)){ vals.push(v); render(); } };
+  input.onchange=()=>{ if(input.list && [...input.list.options].some(o=>o.value===input.value)){ add(input.value); input.value=""; } };
   input.onkeydown=e=>{ if(e.key==="Enter"||e.key===","){ e.preventDefault(); add(input.value); input.value=""; }
     if(e.key==="Backspace" && !input.value && vals.length){ vals.pop(); render(); } };
   input.onblur=()=>{ if(input.value){ add(input.value); input.value=""; } };
@@ -418,9 +415,11 @@ function tagBox(id, quickId, list){
     $(quickId).onclick=e=>{ const l=e.target.dataset.l; if(!l) return; const i=vals.indexOf(l); i>=0?vals.splice(i,1):vals.push(l); render(); }; }
   return {vals, set:a=>{ vals.splice(0,vals.length,...a); render(); }};
 }
-const leagues = tagBox("#leagueTags","#leagueQuick",LEAGUES);
+const leagues = tagBox("#leagueTags");
 const nats = tagBox("#natTags");
-const langs = tagBox("#langTags","#langQuick",LANGS);
+const langs = tagBox("#langTags");
+const custom = tagBox("#customTags");
+$("#addCustom").onclick = e => { e.preventDefault(); $("#customTags input").focus(); };
 
 function seg(id, attr, cb){ $(id).onclick = e => { const v=e.target.dataset[attr]; if(v===undefined) return;
   $$(id+" button").forEach(b=>b.classList.toggle("on", b===e.target)); cb(v); count(); }; }
@@ -431,40 +430,35 @@ seg("#topSeg","t", v=>{ topN=+v; eta(); });
 function eta(){ const n = $("#fPlayers").value.split(",").filter(x=>x.trim()).length || topN;
   $("#eta").textContent = `≈ ${Math.max(1,Math.round(n*0.6))}–${Math.max(2,n)} min`; }
 
-$("#ageQuick").onclick = e => { const a=e.target.dataset.a; if(a===undefined) return; $("#fAgeMax").value=a; if(!a) $("#fAgeMin").value="";
-  $$("#ageQuick .chip").forEach(c=>c.classList.toggle("on", c===e.target && a!=="")); count(); };
-$("#valQuick").onclick = e => { const v=e.target.dataset.v; if(v===undefined) return; $("#fMaxVal").value=v; if(!v) $("#fMinVal").value="";
-  $$("#valQuick .chip").forEach(c=>c.classList.toggle("on", c===e.target && v!=="")); count(); };
-$("#minQuick").onclick = e => { const m=e.target.dataset.m; if(m===undefined) return; minMinutes=m; $$("#minQuick .chip").forEach(c=>c.classList.toggle("on", c===e.target)); count(); };
-$$("#formPanel input, #formPanel textarea, #formPanel select").forEach(el=>el.addEventListener("input", ()=>{ count(); eta(); }));
-$("#toggleF").onclick = () => { const h=$("#formPanel").classList.toggle("hidden"); $("#toggleF").textContent = h ? "Show filters" : "Hide filters"; };
+$$("#formPanel input, #formPanel select").forEach(el=>{ el.addEventListener("input", ()=>{ count(); eta(); }); el.addEventListener("change", count); });
 $("#fDesc").onkeydown = e => { if(e.key==="Enter" && (e.ctrlKey||e.metaKey)) $("#runBtn").click(); };
 
 function getFilters(){
   const k = v => v==="" ? "" : String(Number(v)*1000), d=$("#fDesc").value.trim();
   return { title:d.split(/[.\n]/)[0].slice(0,60) || "Player search", description:d, positions:[...positions], age_min:$("#fAgeMin").value, age_max:$("#fAgeMax").value, foot,
-    min_value:k($("#fMinVal").value), max_value:k($("#fMaxVal").value), leagues:[...leagues.vals], nationalities:[...nats.vals], languages:[...langs.vals],
-    lower, min_minutes:minMinutes, min_height:$("#fHeight").value, contract_by:$("#fContract").value,
-    criteria:$("#fCriteria").value, must_haves:$("#fMust").value };
+    min_value:k($("#fMinVal").value), max_value:k($("#fMaxSel").value), leagues:[...leagues.vals], nationalities:[...nats.vals], languages:[...langs.vals],
+    lower, min_minutes:$("#fMinutes").value, min_height:$("#fHeight").value, contract_by:$("#fContract").value,
+    criteria:$("#fCriteria").value, must_haves:$("#fMust").value, custom:[...custom.vals] };
 }
 function count(){
   const f=getFilters(); let n=0;
   n += f.positions.length?1:0; n += (f.age_min||f.age_max)?1:0; n += (f.min_value||f.max_value)?1:0; n += f.leagues.length?1:0; n += f.lower?1:0;
   n += f.nationalities.length?1:0; n += f.languages.length?1:0; n += f.foot!=="Any"?1:0; n += f.min_minutes?1:0; n += f.min_height?1:0; n += f.contract_by?1:0;
-  n += f.criteria.split(";").filter(x=>x.trim()).length; n += f.must_haves.trim()?1:0;
+  n += f.criteria.split(";").filter(x=>x.trim()).length; n += f.must_haves.trim()?1:0; n += f.custom.length;
   $("#activeN").textContent = n; return n;
 }
 function setFilters(f){
   $("#fDesc").value=f.description||(f.title&&f.title!=="Player search"?f.title:""); positions=new Set(f.positions||[]); $$("#posGrid .chip").forEach(c=>c.classList.toggle("on",positions.has(c.dataset.p)));
   $("#fAgeMin").value=f.age_min??""; $("#fAgeMax").value=f.age_max??"";
-  $("#fMinVal").value=f.min_value_eur?f.min_value_eur/1000:""; $("#fMaxVal").value=f.max_value_eur?f.max_value_eur/1000:"";
-  leagues.set(f.leagues||[]); nats.set(f.nationalities||[]); langs.set(f.languages||[]);
+  $("#fMinVal").value=f.min_value_eur?f.min_value_eur/1000:"";
+  const mx=f.max_value_eur?String(f.max_value_eur/1000):""; if(mx && ![...$("#fMaxSel").options].some(o=>o.value===mx)) $("#fMaxSel").add(new Option("€"+mx+"k", mx)); $("#fMaxSel").value=mx;
+  leagues.set(f.leagues||[]); nats.set(f.nationalities||[]); langs.set(f.languages||[]); custom.set(f.custom||[]);
   lower = f.only_lower_leagues ? "only" : f.include_lower_leagues ? "also" : ""; setSeg("#lowerSeg","l",lower);
   foot=f.foot||"Any"; setSeg("#footSeg","f",foot);
-  minMinutes=f.min_minutes?String(f.min_minutes):""; $$("#minQuick .chip").forEach(c=>c.classList.toggle("on", c.dataset.m===minMinutes));
+  $("#fMinutes").value=f.min_minutes?String(f.min_minutes):"";
   $("#fHeight").value=f.min_height_cm??""; $("#fContract").value=f.contract_ends_by||"";
   $("#fCriteria").value=f.criteria||""; $("#fMust").value=f.must_haves||"";
-  $$("#ageQuick .chip, #valQuick .chip").forEach(c=>c.classList.remove("on")); count();
+  count();
 }
 $("#resetBtn").onclick = () => { setFilters({}); $("#fPlayers").value=""; toast("Search cleared"); };
 
@@ -551,7 +545,7 @@ function nextStep(b){
 function filterLine(f){
   return [f.description?`“${f.description.slice(0,110)}${f.description.length>110?"…":""}”`:"", (f.positions||[]).join("/"), (f.age_min||f.age_max)?`age ${f.age_min||"any"}–${f.age_max||"any"}`:"", f.max_value_eur?`≤ ${euro(f.max_value_eur)}`:"",
     f.foot&&f.foot!=="Any"?`${f.foot} foot`:"", (f.leagues||[]).join(", "), f.only_lower_leagues?"only lower divisions":f.include_lower_leagues?"+ lower divisions":"",
-    (f.nationalities||[]).join(", "), (f.languages||[]).length?"speaks "+f.languages.join("/"):"", f.min_minutes?`${f.min_minutes}+ min`:""].filter(Boolean).join(" · ");
+    (f.nationalities||[]).join(", "), (f.languages||[]).length?"speaks "+f.languages.join("/"):"", ...(f.custom||[]), f.min_minutes?`${f.min_minutes}+ min`:""].filter(Boolean).join(" · ");
 }
 function card(b,i){
   const k = sigClass(b.signal), a = age(b.date_of_birth), dq = (b.data_quality||"").split(" ")[0];

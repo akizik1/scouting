@@ -122,7 +122,7 @@ def filters_from_payload(f: dict) -> sf.SearchFilters:
     lst = lambda k: f[k] if isinstance(f.get(k), list) else sf._csv(f.get(k))
     return sf.SearchFilters(
         title=(f.get("title") or (f.get("description") or "")[:60].strip() or "Player search"),
-        description=f.get("description") or "", languages=lst("languages"),
+        description=f.get("description") or "", languages=lst("languages"), custom=lst("custom"),
         only_lower_leagues=f.get("lower") == "only",
         positions=lst("positions"), age_min=num("age_min", int), age_max=num("age_max", int),
         foot=f.get("foot") or None, max_value_eur=num("max_value"), min_value_eur=num("min_value"),

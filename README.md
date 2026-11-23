@@ -34,7 +34,7 @@ Tip: make a desktop shortcut. macOS: right-click → *Make Alias*. Windows: righ
 ## Use it
 
 1. Describe the player in your own words at the top ("Left winger under 21, left-footed, under €500k, lower divisions in Brazil, speaks Portuguese"). That is enough to search.
-2. Optional: narrow it with the filters below (position, age, budget, leagues, top / + lower / only lower divisions, nationality, languages spoken, foot, height, contract, minutes, stat thresholds).
+2. Optional: narrow it with the filters below, all on one screen (position, age, budget, leagues, top / + lower / only lower divisions, nationality, languages spoken, foot, height, contract, minutes, stat thresholds, style). **＋ Add filter** lets you type your own (e.g. "EU passport").
 3. Pick how many players to show: top 5, 10 (default) or 15. Press **Find players**. Progress shows step by step.
 4. Read the cards. Filter by signal, sort by age, price or data quality.
 5. Click a player for the profile: details, career (clubs and years), a market value chart when a source lists the history, player pages (Transfermarkt, FotMob, Sofascore) and public contacts (agent, club website, email, phone). Contacts are shown only when a public page lists them, never guessed.

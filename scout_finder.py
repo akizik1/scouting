@@ -71,6 +71,7 @@ class SearchFilters(BaseModel):
     contract_ends_by: Optional[str] = None     # YYYY or YYYY-MM-DD
     criteria: str = ""                         # measurable thresholds
     must_haves: str = ""                       # style, checked on video
+    custom: list[str] = []                     # the scout's own filters, free text
 
     def describe(self) -> str:
         p = [f"Search: {self.title}"]
@@ -107,6 +108,8 @@ class SearchFilters(BaseModel):
             p.append(f"Measurable criteria: {self.criteria}")
         if self.must_haves:
             p.append(f"Must-haves (check on video): {self.must_haves}")
+        for c in self.custom:
+            p.append(f"Extra filter from the scout: {c}")
         return "\n".join(p)
 
 
