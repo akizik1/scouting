@@ -2,20 +2,23 @@
 
 **Filters in, watch list out.** A desktop app for football scouts.
 
-**Free to run.** By default it uses the Google Gemini free tier (no credit card) and DuckDuckGo search. You can also run the AI fully offline with Ollama, or switch to Claude (paid) for the best briefs.
+**Free to run.** By default it uses the Google Gemini free tier (no credit card) and DuckDuckGo search, with an optional free Groq key as backup. You can also run the AI fully offline with Ollama, or switch to Claude (paid) for the best briefs.
 
-Set what you are looking for: position, age, budget, leagues, nationality, foot, height, minutes, contract and stat thresholds. Scout Finder searches free football databases for real players who pass, reads open match reports, scouting blogs and fan forums, and gives you a short watch list:
+Describe the player you need in plain words ("left winger under 21, under €500k, lower divisions in Brazil") or set filters: position, age, budget, leagues, top / lower divisions, nationality, languages, foot, height, minutes, contract, stat thresholds, or your own. Scout Finder searches free football databases and ranks the players who fit **by their stats**, with one AI request for the whole list.
 
-- **3 strengths and 3 risks** per player, every claim with its source links and a confidence note (how many independent sources agree; fan-only claims are always *Low*),
+Click a player for a profile: details, career, a market value chart and public contacts (agent, club). Press **Deep research** on the players you like, and it reads open match reports, scouting blogs and fan forums for that player:
+
+- **3 strengths and 3 risks**, every claim with its source links and a confidence note (how many independent sources agree; fan-only claims are always *Low*),
 - **what to check on video** in the next match,
-- a **signal** (🟢 Watch now · 🟡 Monitor · 🔴 Skip) with the reason, and an honest **data quality** label when information is thin,
-- the **next fixture** and where to watch it.
+- a **signal** (🟢 Watch now · 🟡 Monitor · 🔴 Skip) with the reason, and an honest **data quality** label when information is thin.
 
 Pick the players you want to follow and add them to a simple **Notion kanban board** with one click (optional).
 
 > The AI prepares the list. The scout watches and decides.
 
-![Scout Finder (example data)](docs/screenshot.png)
+![Scout Finder: ranked watch list (example data)](docs/screenshot.png)
+
+![Send players to your Notion board (example data)](docs/notion.png)
 
 ## Start it (double-click)
 
