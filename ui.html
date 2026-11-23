@@ -311,14 +311,34 @@ details ul{margin:8px 0;padding-left:18px;font-size:12.5px;color:#c3cfdd}
   <div class="panel modal">
     <h3>Settings</h3>
     <div class="hint" style="margin:0">Saved only on this computer, in <span id="folder"></span>.</div>
-    <label>Anthropic API key <span style="color:var(--red)">*</span></label>
-    <input type="password" id="sKey" placeholder="sk-ant-…">
-    <div class="hint">console.anthropic.com → API Keys → Create key</div>
-    <label>Model</label>
-    <select id="sModel">
-      <option value="claude-opus-5-5">Claude Opus 5.5 · best quality</option>
-      <option value="claude-sonnet-5-5">Claude Sonnet 5.5 · cheaper, faster</option>
+    <label>AI provider</label>
+    <select id="sProv">
+      <option value="gemini">Google Gemini · free tier (recommended)</option>
+      <option value="ollama">Ollama · free, runs on this computer</option>
+      <option value="claude">Claude · paid, best quality</option>
     </select>
+    <div data-prov="gemini">
+      <label>Gemini API key <span style="color:var(--red)">*</span></label>
+      <input type="password" id="sGemini" placeholder="AIza…">
+      <div class="hint">Free, no card: aistudio.google.com/apikey → Create API key. Free-tier limits apply (a few dozen searches a day), and Google may use free-tier prompts to improve its products.</div>
+    </div>
+    <div data-prov="ollama">
+      <label>Ollama model</label>
+      <input id="sOllamaModel" placeholder="qwen3:8b">
+      <label>Ollama address</label>
+      <input id="sOllamaUrl" placeholder="http://localhost:11434">
+      <div class="hint">Install Ollama from ollama.com, then run <b>ollama pull qwen3:8b</b> once. Fully offline AI, but slower and needs a decent computer (16 GB RAM).</div>
+    </div>
+    <div data-prov="claude">
+      <label>Anthropic API key <span style="color:var(--red)">*</span></label>
+      <input type="password" id="sKey" placeholder="sk-ant-…">
+      <div class="hint">Paid: console.anthropic.com → API Keys. Reads more sources, best briefs.</div>
+      <label>Model</label>
+      <select id="sModel">
+        <option value="claude-opus-5-5">Claude Opus 5.5 · best quality</option>
+        <option value="claude-sonnet-5-5">Claude Sonnet 5.5 · cheaper, faster</option>
+      </select>
+    </div>
     <label>Notion token <span style="color:var(--dim);font-weight:500">(optional)</span></label>
     <input type="password" id="sNotion" placeholder="ntn_…">
     <div class="hint">Only if you want a Notion board of the players you pick. The app adds cards to a database named "Watchlist" that you share with the integration.</div>
@@ -412,12 +432,16 @@ async function loadSettings(){
   settings = await api("/api/settings");
   $("#keyDot").classList.toggle("ok", settings.ready); $("#folder").textContent = settings.folder;
   $("#sKey").value = settings.anthropic_key; $("#sNotion").value = settings.notion_token; $("#sModel").value = settings.model || "claude-opus-5-5";
+  $("#sProv").value = settings.provider || "gemini"; $("#sGemini").value = settings.gemini_key || "";
+  $("#sOllamaModel").value = settings.ollama_model || ""; $("#sOllamaUrl").value = settings.ollama_url || ""; showProv();
   $("#pushBtn").classList.toggle("hidden", !settings.notion_ready); renderCards();
 }
+function showProv(){ $$("[data-prov]").forEach(d => d.classList.toggle("hidden", d.dataset.prov !== $("#sProv").value)); }
+$("#sProv").onchange = showProv;
 $("#setBtn").onclick = () => $("#setVeil").classList.remove("hidden");
 $("#setCancel").onclick = () => $("#setVeil").classList.add("hidden");
 $("#setSave").onclick = async () => {
-  await api("/api/settings", {anthropic_key:$("#sKey").value, notion_token:$("#sNotion").value, model:$("#sModel").value});
+  await api("/api/settings", {provider:$("#sProv").value, gemini_key:$("#sGemini").value, ollama_model:$("#sOllamaModel").value, ollama_url:$("#sOllamaUrl").value, anthropic_key:$("#sKey").value, notion_token:$("#sNotion").value, model:$("#sModel").value});
   $("#setVeil").classList.add("hidden"); toast("Settings saved"); await loadSettings();
 };
 
@@ -453,7 +477,7 @@ function poll(jobId, onDone, expected){
   }, 1000);
 }
 $("#runBtn").onclick = async () => {
-  if(!settings.ready){ $("#setVeil").classList.remove("hidden"); toast("Add your Anthropic API key first"); return; }
+  if(!settings.ready){ $("#setVeil").classList.remove("hidden"); toast("Add your free Gemini API key first"); return; }
   const filters = getFilters();
   if(+$("#activeN").textContent === 0 && !$("#fPlayers").value.trim()){ toast("Set at least one filter"); return; }
   const payload = {filters, top:+$("#fTop").value, players:$("#fPlayers").value};

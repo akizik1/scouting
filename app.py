@@ -43,10 +43,17 @@ def load_settings() -> dict:
 
 def save_settings(new: dict) -> None:
     cur = load_settings()
-    for k in ("anthropic_key", "notion_token", "model"):
+    for k in ("provider", "gemini_key", "ollama_url", "ollama_model",
+              "anthropic_key", "notion_token", "model"):
+        if k not in new:
+            continue
         v = (new.get(k) or "").strip()
-        if v and "•" not in v:          # masked value = unchanged
+        if "•" in v:                    # masked value = unchanged
+            continue
+        if v:
             cur[k] = v
+        elif k in ("ollama_url", "ollama_model"):
+            cur.pop(k, None)
     CONFIG.write_text(json.dumps(cur, indent=2), encoding="utf-8")
     try:
         os.chmod(CONFIG, 0o600)
@@ -57,11 +64,25 @@ def save_settings(new: dict) -> None:
 
 def apply_settings() -> None:
     s = load_settings()
+    sf.PROVIDER = s.get("provider") or os.getenv("SCOUT_PROVIDER") or "gemini"
+    if s.get("gemini_key"):
+        os.environ["GEMINI_API_KEY"] = s["gemini_key"]
+    sf.OLLAMA_URL = s.get("ollama_url") or os.getenv("OLLAMA_URL") or "http://localhost:11434"
+    sf.OLLAMA_MODEL = s.get("ollama_model") or os.getenv("OLLAMA_MODEL") or "qwen3:8b"
     if s.get("anthropic_key"):
         os.environ["ANTHROPIC_API_KEY"] = s["anthropic_key"]
     if s.get("notion_token"):
         os.environ["NOTION_TOKEN"] = s["notion_token"]
     sf.MODEL = s.get("model") or os.getenv("SCOUT_MODEL") or "claude-opus-5-5"
+
+
+def provider_ready(s: dict) -> bool:
+    prov = s.get("provider") or sf.PROVIDER
+    if prov == "claude":
+        return bool(s.get("anthropic_key") or os.getenv("ANTHROPIC_API_KEY"))
+    if prov == "ollama":
+        return True
+    return bool(s.get("gemini_key") or os.getenv("GEMINI_API_KEY"))
 
 
 def mask(v: str | None) -> str:
@@ -113,8 +134,9 @@ def run_search(job: dict, payload: dict) -> None:
     sf.LOG_HOOK = lambda msg: job["log"].append(msg)
     try:
         with RUN_LOCK:
-            if not os.getenv("ANTHROPIC_API_KEY"):
-                raise RuntimeError("Add your Anthropic API key in Settings first.")
+            if not provider_ready(load_settings()):
+                raise RuntimeError("Add your free Gemini API key in Settings first "
+                                   "(or pick Ollama / Claude).")
             f = filters_from_payload(payload.get("filters", {}))
             job["filters"] = f.model_dump()
             top = max(1, min(int(payload.get("top") or 5), 10))
@@ -187,10 +209,14 @@ class Handler(BaseHTTPRequestHandler):
             self.wfile.write(body)
         elif p == "/api/settings":
             s = load_settings()
-            self._json({"anthropic_key": mask(s.get("anthropic_key")),
+            self._json({"provider": s.get("provider") or sf.PROVIDER,
+                        "gemini_key": mask(s.get("gemini_key")),
+                        "ollama_url": s.get("ollama_url") or sf.OLLAMA_URL,
+                        "ollama_model": s.get("ollama_model") or sf.OLLAMA_MODEL,
+                        "anthropic_key": mask(s.get("anthropic_key")),
                         "notion_token": mask(s.get("notion_token")),
                         "model": s.get("model") or sf.MODEL,
-                        "ready": bool(s.get("anthropic_key")),
+                        "ready": provider_ready(s),
                         "notion_ready": bool(s.get("notion_token")),
                         "folder": str(RESULTS_DIR)})
         elif p == "/api/history":

@@ -5,7 +5,9 @@ Scout Finder
 Filters in, watch list out.
 
 Give it what you are looking for (position, age, budget, leagues, nationality,
-foot, minutes, contract, stat thresholds, style). It will:
+foot, minutes, contract, stat thresholds, style). It runs for free by default
+(Google Gemini free tier + DuckDuckGo search, or a local Ollama model); Claude is
+an optional paid provider. It will:
   1. find real players who fit, using free public sources
      (Transfermarkt, FotMob, Sofascore, Ogol, league sites, Wikipedia),
   2. read open match reports, scouting blogs, Reddit and fan forums,
@@ -27,11 +29,17 @@ import re
 import sys
 from typing import Literal, Optional
 
-import anthropic
-import requests
-from pydantic import BaseModel
+import time
 
-MODEL = os.getenv("SCOUT_MODEL", "claude-opus-5-5")
+import requests
+from pydantic import BaseModel, ValidationError
+
+# Provider: "gemini" (free tier, default), "ollama" (local, free) or "claude" (paid)
+PROVIDER = os.getenv("SCOUT_PROVIDER", "gemini")
+MODEL = os.getenv("SCOUT_MODEL", "claude-opus-5-5")          # Claude model
+GEMINI_MODEL = os.getenv("GEMINI_MODEL", "")                  # empty = pick automatically
+OLLAMA_URL = os.getenv("OLLAMA_URL", "http://localhost:11434")
+OLLAMA_MODEL = os.getenv("OLLAMA_MODEL", "qwen3:8b")
 NOTION_VERSION = "2022-06-28"
 
 POSITIONS = Literal["GK", "CB", "RB", "LB", "RWB", "LWB", "DM", "CM", "AM",
@@ -167,11 +175,24 @@ Rules:
 - Give per-90 numbers with sample size (minutes, matches)."""
 
 
-def make_client() -> anthropic.Anthropic:
-    return anthropic.Anthropic()  # reads ANTHROPIC_API_KEY
+def make_client():
+    """Claude client for PROVIDER=claude, otherwise a free LLM client."""
+    if PROVIDER == "claude":
+        import anthropic  # optional, only for the paid provider
+        return anthropic.Anthropic()  # reads ANTHROPIC_API_KEY
+    if PROVIDER == "ollama":
+        return Ollama(OLLAMA_URL, OLLAMA_MODEL)
+    key = os.getenv("GEMINI_API_KEY") or os.getenv("GOOGLE_API_KEY")
+    if not key:
+        raise RuntimeError("Add your free Gemini API key in Settings (aistudio.google.com/apikey).")
+    return Gemini(key, GEMINI_MODEL)
 
 
-def research(client: anthropic.Anthropic, prompt: str, max_uses: int = 12) -> str:
+def is_free(client) -> bool:
+    return isinstance(client, FreeLLM)
+
+
+def research(client, prompt: str, max_uses: int = 12) -> str:
     """One web-research turn: Claude searches and reads pages, returns notes with URLs."""
     tools = [
         {"type": "web_search_20260209", "name": "web_search", "max_uses": max_uses},
@@ -213,7 +234,7 @@ def research(client: anthropic.Anthropic, prompt: str, max_uses: int = 12) -> st
     return notes
 
 
-def structure(client: anthropic.Anthropic, notes: str, schema: type[BaseModel], task: str):
+def structure(client, notes: str, schema: type[BaseModel], task: str):
     """Turn research notes into validated JSON. No new facts allowed."""
     resp = client.messages.parse(
         model=MODEL,
@@ -234,7 +255,258 @@ def structure(client: anthropic.Anthropic, notes: str, schema: type[BaseModel], 
     return resp.parsed_output
 
 
+# --------------------------------------------------------------------------
+# Free providers: DuckDuckGo search + page reading + Gemini free tier / Ollama
+# --------------------------------------------------------------------------
+UA = ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+      "(KHTML, like Gecko) Chrome/130.0 Safari/537.36")
+
+
+def free_search(query: str, n: int = 6) -> list[dict]:
+    """DuckDuckGo search, no key needed. Returns [{title, url, snippet}]."""
+    try:
+        from ddgs import DDGS
+    except ImportError:  # older package name
+        from duckduckgo_search import DDGS
+    for attempt in range(3):
+        try:
+            rows = DDGS().text(query, max_results=n) or []
+            return [{"title": r.get("title", ""), "url": r.get("href") or r.get("url", ""),
+                     "snippet": r.get("body", "")} for r in rows if (r.get("href") or r.get("url"))]
+        except Exception as e:  # rate limit or network: wait and retry
+            log(f"Search retry ({e.__class__.__name__}) for: {query}")
+            time.sleep(3 * (attempt + 1))
+    return []
+
+
+def fetch_text(url: str, limit: int = 6000) -> str:
+    """Download a page and keep its readable text."""
+    try:
+        r = requests.get(url, headers={"User-Agent": UA, "Accept-Language": "en,*;q=0.5"},
+                         timeout=20)
+        if r.status_code >= 400 or "html" not in r.headers.get("content-type", "html"):
+            return ""
+        from bs4 import BeautifulSoup
+        soup = BeautifulSoup(r.text, "html.parser")
+        for t in soup(["script", "style", "noscript", "svg", "header", "footer", "nav", "form"]):
+            t.decompose()
+        text = re.sub(r"\s+", " ", soup.get_text(" ")).strip()
+        return text[:limit]
+    except Exception:
+        return ""
+
+
+def gather(queries: list[str], budget: int, per_query: int = 5, per_page: int = 6000,
+           max_pages: int = 10) -> tuple[str, list[str]]:
+    """Search, read pages, return (numbered notes, list of URLs actually read)."""
+    seen, notes, urls, used = set(), [], [], 0
+    hits = []
+    for q in queries:
+        for h in free_search(q, per_query):
+            if h["url"] not in seen:
+                seen.add(h["url"])
+                hits.append(h)
+    for h in hits:
+        if len(urls) >= max_pages or used >= budget:
+            break
+        body = fetch_text(h["url"], min(per_page, budget - used)) or h["snippet"]
+        if not body:
+            continue
+        urls.append(h["url"])
+        block = f"[S{len(urls)}] {h['title']}\nURL: {h['url']}\n{body}"
+        notes.append(block)
+        used += len(block)
+    # snippets of pages not read still help (cheap)
+    for h in hits:
+        if h["url"] not in urls and h["snippet"] and used < budget:
+            urls.append(h["url"])
+            block = f"[S{len(urls)}] {h['title']} (search snippet only)\nURL: {h['url']}\n{h['snippet']}"
+            notes.append(block)
+            used += len(block)
+    return "\n\n".join(notes), urls
+
+
+class FreeLLM:
+    """Common JSON helper: ask for JSON, validate with Pydantic, retry once."""
+    budget = 60000  # characters of source text per call
+
+    def complete(self, prompt: str, schema: dict) -> str:
+        raise NotImplementedError
+
+    def ask(self, prompt: str, model: type[BaseModel]):
+        schema = model.model_json_schema()
+        full = (f"{SYSTEM}\n\n{prompt}\n\nAnswer with ONE JSON object that matches this JSON "
+                f"schema. No markdown, no comments.\n{json.dumps(schema)}")
+        err = ""
+        for _ in range(2):
+            raw = self.complete(full + err, schema)
+            raw = re.sub(r"^```(?:json)?|```$", "", raw.strip(), flags=re.M).strip()
+            try:
+                return model.model_validate_json(raw)
+            except ValidationError as e:
+                err = (f"\n\nYour last answer was not valid: {str(e)[:1500]}\n"
+                       "Fix it and answer with valid JSON only.")
+        raise RuntimeError("The AI did not return a valid answer. Try again.")
+
+
+class Gemini(FreeLLM):
+    BASE = "https://generativelanguage.googleapis.com/v1beta"
+
+    def __init__(self, key: str, model: str = ""):
+        self.s = requests.Session()
+        self.s.headers.update({"x-goog-api-key": key, "Content-Type": "application/json"})
+        self.model = model or self.pick_model()
+
+    def pick_model(self) -> str:
+        """Pick a free-tier friendly model: Flash-Lite first, then Flash (stable before preview)."""
+        try:
+            r = self.s.get(f"{self.BASE}/models", params={"pageSize": 200}, timeout=30)
+            r.raise_for_status()
+            names = [m["name"].split("/", 1)[1] for m in r.json().get("models", [])
+                     if "generateContent" in m.get("supportedGenerationMethods", [])]
+        except Exception:
+            return "gemini-2.5-flash-lite"
+        bad = ("image", "tts", "audio", "live", "embedding", "thinking", "exp", "learnlm")
+        names = [n for n in names if n.startswith("gemini-") and not any(b in n for b in bad)]
+
+        def score(n):
+            ver = re.findall(r"gemini-(\d+(?:\.\d+)?)", n)
+            v = float(ver[0]) if ver else 0
+            tier = 0 if "flash-lite" in n else 1 if "flash" in n else 3
+            return (tier, "preview" in n, n.endswith("latest"), -v)
+        names.sort(key=score)
+        return names[0] if names else "gemini-2.5-flash-lite"
+
+    def complete(self, prompt: str, schema: dict) -> str:
+        body = {"contents": [{"role": "user", "parts": [{"text": prompt}]}],
+                "generationConfig": {"responseMimeType": "application/json", "temperature": 0.2}}
+        for attempt in range(4):
+            r = self.s.post(f"{self.BASE}/models/{self.model}:generateContent", json=body, timeout=180)
+            if r.status_code == 429 or r.status_code >= 500:  # free-tier rate limit: wait
+                m = re.search(r'"retryDelay":\s*"(\d+)', r.text)
+                wait = min(int(m.group(1)) + 2 if m else 20 * (attempt + 1), 90)
+                log(f"Gemini free tier is busy, waiting {wait}s")
+                time.sleep(wait)
+                continue
+            if r.status_code >= 400:
+                raise RuntimeError(f"Gemini: {r.status_code} {r.text[:300]}")
+            cand = (r.json().get("candidates") or [{}])[0]
+            parts = cand.get("content", {}).get("parts", [])
+            return "".join(p.get("text", "") for p in parts)
+        raise RuntimeError("Gemini free-tier limit reached. Wait a minute (or until tomorrow) "
+                           "and try again.")
+
+
+class Ollama(FreeLLM):
+    budget = 20000  # local models have smaller context
+
+    def __init__(self, url: str, model: str):
+        self.url, self.model = url.rstrip("/"), model
+
+    def complete(self, prompt: str, schema: dict) -> str:
+        try:
+            r = requests.post(f"{self.url}/api/chat", timeout=900, json={
+                "model": self.model, "stream": False, "format": schema,
+                "options": {"temperature": 0.2, "num_ctx": 16384},
+                "messages": [{"role": "user", "content": prompt}]})
+        except requests.ConnectionError:
+            raise RuntimeError("Ollama is not running. Install it from ollama.com and run "
+                               f"'ollama pull {self.model}'.")
+        if r.status_code >= 400:
+            raise RuntimeError(f"Ollama: {r.status_code} {r.text[:300]}")
+        return r.json().get("message", {}).get("content", "")
+
+
+class Queries(BaseModel):
+    queries: list[str]
+
+
+def clean_sources(b: PlayerBrief, read: list[str]) -> PlayerBrief:
+    """Free models may invent links: keep only URLs we really read, recount sources."""
+    ok = set(read)
+    for c in b.strengths + b.risks:
+        c.sources = [u for u in c.sources if u in ok]
+        c.source_count = min(c.source_count, len(c.sources))
+        if c.source_count <= 1:
+            c.confidence = "Low"
+        elif c.source_count == 2 and c.confidence == "High":
+            c.confidence = "Medium"
+    b.all_sources = [u for u in dict.fromkeys(b.all_sources + read) if u in ok]
+    for attr in ("stats_source", "value_source"):
+        if getattr(b, attr) and getattr(b, attr) not in ok:
+            setattr(b, attr, None)
+    if b.next_fixture and b.next_fixture.source_url not in ok:
+        b.next_fixture.source_url = None
+    return b
+
+
+def free_find_candidates(llm: FreeLLM, f: SearchFilters, n: int) -> CandidateList:
+    today = dt.date.today().isoformat()
+    q = llm.ask(f"""Today is {today}. Write 5 short web search queries (DuckDuckGo) that find
+REAL football players who pass these filters. Mix: Transfermarkt lists, league stats pages,
+"best young <position> in <league>" articles, scouting blogs; use the local language when
+it helps.
+
+{f.describe()}""", Queries).queries[:6]
+    notes, _ = gather(q, llm.budget, max_pages=8)
+    if not notes:
+        raise RuntimeError("Web search returned nothing. DuckDuckGo may be rate-limiting: "
+                           "wait a minute and try again.")
+    return llm.ask(f"""Today is {today}. From the sources below, list up to {n} REAL players
+who pass ALL hard filters. Use ONLY what the sources say. Drop anyone who clearly fails a
+filter. profile_url must be one of the source URLs. In search_notes say what you could not
+verify.
+
+{f.describe()}
+
+<sources>
+{notes}
+</sources>""", CandidateList)
+
+
+def free_brief_player(llm: FreeLLM, f: SearchFilters, name: str, club: str = "") -> PlayerBrief:
+    today = dt.date.today().isoformat()
+    who = f"{name} {club}".strip()
+    year = dt.date.today().year
+    notes, read = gather([
+        f"{who} transfermarkt",
+        f"{who} stats {year}",
+        f"{who} scouting report",
+        f"{name} reddit OR forum",
+        f"{who} next match",
+    ], llm.budget, per_query=4, max_pages=9)
+    if not notes:
+        raise RuntimeError(f"No public pages found for {name}.")
+    b = llm.ask(f"""Today is {today}. Build a scouting brief for {who} against these filters,
+using ONLY the numbered sources below. Do not add facts, numbers or URLs that are not in
+the sources. Unknown -> null / "NO DATA".
+
+{f.describe()}
+
+1. Profile: position(s), nationality, foot, date of birth, height, club, league, contract end,
+   market value (value_source = its URL), minutes this season.
+2. stats_line: stats this season per 90 with minutes/matches. criteria_check: each filter
+   and criterion -> "PASS / FAIL / NO DATA: ...".
+3. Max 3 STRENGTHS and 3 RISKS from what people say (reports, blogs, forums). For each: the
+   claim, the source URLs that support it, how many independent sources agree, confidence
+   (High = 3+ independent sources incl. one non-fan; Medium = 2; Low = 1 or fans only).
+4. watch_on_video: 3-5 concrete things to check in his next match.
+5. next_fixture if a source shows it.
+6. data_quality Good / Thin / Very thin, and data_gaps: exactly what is missing.
+7. signal: "🟢 Watch now" (passes most filters, sample ≥ ~450 min), "🟡 Monitor" (mixed,
+   small sample or key data missing), "🔴 Skip" (clearly fails a core filter). 2-3 sentence
+   signal_reason.
+8. all_sources: the URLs you used.
+
+<sources>
+{notes}
+</sources>""", PlayerBrief)
+    return clean_sources(b, read)
+
+
 def find_candidates(client, f: SearchFilters, n: int) -> CandidateList:
+    if is_free(client):
+        return free_find_candidates(client, f, n)
     today = dt.date.today().isoformat()
     notes = research(client, f"""Today is {today}.
 Find up to {n} REAL players who pass ALL of these filters. Prefer players who are not
@@ -252,6 +524,8 @@ verify.""", max_uses=15)
 
 
 def brief_player(client, f: SearchFilters, name: str, club: str = "") -> PlayerBrief:
+    if is_free(client):
+        return free_brief_player(client, f, name, club)
     today = dt.date.today().isoformat()
     who = f"{name} ({club})" if club else name
     notes = research(client, f"""Today is {today}.
@@ -287,7 +561,7 @@ def run_search(client, f: SearchFilters, top: int = 5, players: Optional[list[st
     if players:
         targets = [(p, "") for p in players]
     else:
-        step("Searching Transfermarkt, FotMob, Sofascore, Ogol for players who pass the filters")
+        step("Searching the web (Transfermarkt, FotMob, Sofascore, league sites) for players who pass the filters")
         cl = find_candidates(client, f, max(top * 2, 6))
         targets = [(c.name, c.club) for c in cl.candidates[:top]]
         if not targets:
@@ -542,10 +816,14 @@ def main() -> None:
     g.add_argument("--must-haves", help='e.g. "pace in transition, presses"')
     ap.add_argument("--player", help="skip discovery: brief these players (comma separated)")
     ap.add_argument("--top", type=int, default=5)
+    ap.add_argument("--provider", choices=["gemini", "ollama", "claude"],
+                    help="AI provider (default gemini free tier; env SCOUT_PROVIDER)")
     ap.add_argument("--notion", action="store_true", help="add the players to your Notion Watchlist")
     ap.add_argument("--save", default="watchlist.json")
     ap.add_argument("--from-json", help="load a saved result instead of searching")
     a = ap.parse_args()
+    global PROVIDER
+    PROVIDER = a.provider or PROVIDER
 
     notion = None
     if a.notion:
