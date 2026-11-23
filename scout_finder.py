@@ -40,6 +40,7 @@ MODEL = os.getenv("SCOUT_MODEL", "claude-opus-5-5")          # Claude model
 GEMINI_MODEL = os.getenv("GEMINI_MODEL", "")                  # empty = pick automatically
 OLLAMA_URL = os.getenv("OLLAMA_URL", "http://localhost:11434")
 OLLAMA_MODEL = os.getenv("OLLAMA_MODEL", "qwen3:8b")
+GROQ_MODEL = os.getenv("GROQ_MODEL", "openai/gpt-oss-120b")   # free backup provider
 NOTION_VERSION = "2022-06-28"
 
 POSITIONS = Literal["GK", "CB", "RB", "LB", "RWB", "LWB", "DM", "CM", "AM",
@@ -192,6 +193,7 @@ class PlayerBrief(BaseModel):
     career: list[CareerStep] = []      # clubs and years, youth to now
     value_history: list[ValuePoint] = []
     value_history_source: Optional[str] = None
+    deep: bool = True                  # False = quick search card, no strengths/risks yet
 
 
 # --------------------------------------------------------------------------
@@ -221,9 +223,17 @@ def make_client():
     if PROVIDER == "ollama":
         return Ollama(OLLAMA_URL, OLLAMA_MODEL)
     key = os.getenv("GEMINI_API_KEY") or os.getenv("GOOGLE_API_KEY")
-    if not key:
+    groq = os.getenv("GROQ_API_KEY")
+    chain: list[FreeLLM] = []
+    if key:
+        chain.append(Gemini(key, GEMINI_MODEL))
+    if groq:
+        chain.append(Groq(groq, GROQ_MODEL))
+    if PROVIDER == "groq":
+        chain.reverse()
+    if not chain:
         raise RuntimeError("Add your free Gemini API key in Settings (aistudio.google.com/apikey).")
-    return Gemini(key, GEMINI_MODEL)
+    return chain[0] if len(chain) == 1 else Chain(chain)
 
 
 def is_free(client) -> bool:
@@ -364,19 +374,45 @@ def gather(queries: list[str], budget: int, per_query: int = 5, per_page: int = 
     return "\n\n".join(notes), urls
 
 
+class QuotaError(RuntimeError):
+    """The free quota of this provider is used up (for today, or it has none)."""
+
+
+def trim_sources(prompt: str, limit: int) -> str:
+    """Shorten the <sources> part so the prompt fits a provider with a smaller limit."""
+    if len(prompt) <= limit or "<sources>" not in prompt:
+        return prompt
+    a, rest = prompt.split("<sources>", 1)
+    src, b = rest.split("</sources>", 1)
+    keep = max(2000, limit - len(a) - len(b) - 40)
+    return f"{a}<sources>{src[:keep]}\n[...]</sources>{b}"
+
+
 class FreeLLM:
     """Common JSON helper: ask for JSON, validate with Pydantic, retry once."""
-    budget = 60000  # characters of source text per call
+    budget = 60000      # characters of source text per call
+    max_prompt = 10**9  # hard prompt size limit (characters)
+    min_gap = 0.0       # seconds between calls (free per-minute limits)
+    _last = 0.0
+    name = "AI"
 
     def complete(self, prompt: str, schema: dict) -> str:
         raise NotImplementedError
 
+    def pace(self):
+        wait = self._last + self.min_gap - time.time()
+        if wait > 0:
+            time.sleep(wait)
+        self._last = time.time()
+
     def ask(self, prompt: str, model: type[BaseModel]):
+        prompt = trim_sources(prompt, self.max_prompt - 8000)
         schema = model.model_json_schema()
         full = (f"{SYSTEM}\n\n{prompt}\n\nAnswer with ONE JSON object that matches this JSON "
                 f"schema. No markdown, no comments.\n{json.dumps(schema)}")
         err = ""
         for _ in range(2):
+            self.pace()
             raw = self.complete(full + err, schema)
             raw = re.sub(r"^```(?:json)?|```$", "", raw.strip(), flags=re.M).strip()
             try:
@@ -388,51 +424,134 @@ class FreeLLM:
 
 
 class Gemini(FreeLLM):
+    """Gemini free tier. Each model has its own free quota, so when one is used up
+    (or has no free quota at all) we move on to the next one."""
     BASE = "https://generativelanguage.googleapis.com/v1beta"
+    min_gap = 5.0  # stay under ~12 requests a minute
+    name = "Gemini"
 
     def __init__(self, key: str, model: str = ""):
         self.s = requests.Session()
         self.s.headers.update({"x-goog-api-key": key, "Content-Type": "application/json"})
-        self.model = model or self.pick_model()
+        self.models = [model] if model else self.list_models()
+        self.model = self.models[0]
+        self.no_json: set[str] = set()
 
-    def pick_model(self) -> str:
-        """Pick a free-tier friendly model: Flash-Lite first, then Flash (stable before preview)."""
+    def list_models(self) -> list[str]:
+        """Free-tier friendly order: Flash-Lite, Flash, then Gemma (open models, big free quota)."""
         try:
             r = self.s.get(f"{self.BASE}/models", params={"pageSize": 200}, timeout=30)
             r.raise_for_status()
             names = [m["name"].split("/", 1)[1] for m in r.json().get("models", [])
                      if "generateContent" in m.get("supportedGenerationMethods", [])]
         except Exception:
-            return "gemini-2.5-flash-lite"
-        bad = ("image", "tts", "audio", "live", "embedding", "thinking", "exp", "learnlm")
-        names = [n for n in names if n.startswith("gemini-") and not any(b in n for b in bad)]
+            return ["gemini-2.5-flash-lite", "gemini-2.5-flash"]
+        bad = ("image", "tts", "audio", "live", "embedding", "thinking", "exp", "learnlm",
+               "pro", "robotics", "computer", "nano", "1b", "4b", "e2b", "e4b")
+        names = [n for n in names if n.startswith(("gemini-", "gemma-")) and not any(x in n for x in bad)]
 
         def score(n):
-            ver = re.findall(r"gemini-(\d+(?:\.\d+)?)", n)
+            ver = re.findall(r"(?:gemini|gemma)-(\d+(?:\.\d+)?)", n)
             v = float(ver[0]) if ver else 0
-            tier = 0 if "flash-lite" in n else 1 if "flash" in n else 3
+            tier = 0 if "flash-lite" in n else 1 if "flash" in n else 2 if n.startswith("gemma") else 3
             return (tier, "preview" in n, n.endswith("latest"), -v)
         names.sort(key=score)
-        return names[0] if names else "gemini-2.5-flash-lite"
+        return names[:8] or ["gemini-2.5-flash-lite"]
+
+    def budget_for(self, m: str) -> int:
+        return 20000 if m.startswith("gemma") else 60000
+
+    @property
+    def budget(self):
+        return self.budget_for(self.model)
 
     def complete(self, prompt: str, schema: dict) -> str:
-        body = {"contents": [{"role": "user", "parts": [{"text": prompt}]}],
-                "generationConfig": {"responseMimeType": "application/json", "temperature": 0.2}}
-        for attempt in range(4):
-            r = self.s.post(f"{self.BASE}/models/{self.model}:generateContent", json=body, timeout=180)
-            if r.status_code == 429 or r.status_code >= 500:  # free-tier rate limit: wait
-                m = re.search(r'"retryDelay":\s*"(\d+)', r.text)
-                wait = min(int(m.group(1)) + 2 if m else 20 * (attempt + 1), 90)
-                log(f"Gemini free tier is busy, waiting {wait}s")
+        while self.models:
+            m = self.model
+            body = {"contents": [{"role": "user", "parts": [{"text": trim_sources(prompt, self.budget_for(m) + 12000)}]}],
+                    "generationConfig": {"temperature": 0.2}}
+            if m not in self.no_json:
+                body["generationConfig"]["responseMimeType"] = "application/json"
+            for attempt in range(3):
+                r = self.s.post(f"{self.BASE}/models/{m}:generateContent", json=body, timeout=180)
+                if r.status_code == 400 and "json" in r.text.lower() and m not in self.no_json:
+                    self.no_json.add(m)          # e.g. Gemma: no JSON mode, plain text is fine
+                    body["generationConfig"].pop("responseMimeType", None)
+                    continue
+                daily = r.status_code == 429 and re.search(r"PerDay|per day|limit: 0|free_tier.*: 0", r.text, re.I)
+                if r.status_code in (403, 404) or daily:
+                    log(f"Gemini {m}: free quota used up for today, trying another free model")
+                    break
+                if r.status_code == 429 or r.status_code >= 500:   # per-minute limit: wait a bit
+                    mm = re.search(r'"retryDelay":\s*"(\d+)', r.text)
+                    wait = min(int(mm.group(1)) + 2 if mm else 15 * (attempt + 1), 65)
+                    log(f"Gemini free tier is busy, waiting {wait}s")
+                    time.sleep(wait)
+                    continue
+                if r.status_code >= 400:
+                    raise RuntimeError(f"Gemini: {r.status_code} {r.text[:300]}")
+                cand = (r.json().get("candidates") or [{}])[0]
+                return "".join(p.get("text", "") for p in cand.get("content", {}).get("parts", []))
+            self.models.pop(0)
+            if self.models:
+                self.model = self.models[0]
+        raise QuotaError("Gemini free limit is used up for today on every free model. "
+                         "Add a free Groq key in Settings as a backup, or try again tomorrow.")
+
+
+class Groq(FreeLLM):
+    """Groq free tier (OpenAI-compatible API). Smaller per-minute token limit, so short prompts."""
+    URL = "https://api.groq.com/openai/v1/chat/completions"
+    budget = 18000
+    max_prompt = 26000
+    min_gap = 3.0
+    name = "Groq"
+
+    def __init__(self, key: str, model: str):
+        self.key, self.model = key, model
+
+    def complete(self, prompt: str, schema: dict) -> str:
+        for attempt in range(3):
+            r = requests.post(self.URL, timeout=180, headers={"Authorization": f"Bearer {self.key}"}, json={
+                "model": self.model, "temperature": 0.2, "response_format": {"type": "json_object"},
+                "messages": [{"role": "user", "content": prompt}]})
+            if r.status_code == 429:
+                reset = r.headers.get("x-ratelimit-reset-requests", "")
+                if "h" in reset or re.search(r"per day|TPD|RPD", r.text, re.I):
+                    raise QuotaError("Groq free limit is used up for today.")
+                wait = min(float(r.headers.get("retry-after") or 20), 65)
+                log(f"Groq free tier is busy, waiting {wait:.0f}s")
                 time.sleep(wait)
                 continue
             if r.status_code >= 400:
-                raise RuntimeError(f"Gemini: {r.status_code} {r.text[:300]}")
-            cand = (r.json().get("candidates") or [{}])[0]
-            parts = cand.get("content", {}).get("parts", [])
-            return "".join(p.get("text", "") for p in parts)
-        raise RuntimeError("Gemini free-tier limit reached. Wait a minute (or until tomorrow) "
-                           "and try again.")
+                raise RuntimeError(f"Groq: {r.status_code} {r.text[:300]}")
+            return r.json()["choices"][0]["message"]["content"] or ""
+        raise QuotaError("Groq free tier is busy.")
+
+
+class Chain(FreeLLM):
+    """Try free providers in order; move to the next when one runs out of quota."""
+
+    def __init__(self, items: list[FreeLLM]):
+        self.items = items
+
+    @property
+    def budget(self):
+        return self.items[0].budget
+
+    @property
+    def max_prompt(self):
+        return self.items[0].max_prompt
+
+    def ask(self, prompt: str, model: type[BaseModel]):
+        while True:
+            try:
+                return self.items[0].ask(prompt, model)
+            except QuotaError as e:
+                if len(self.items) == 1:
+                    raise
+                log(f"{e} Switching to {self.items[1].name}.")
+                self.items.pop(0)
 
 
 class Ollama(FreeLLM):
@@ -457,6 +576,111 @@ class Ollama(FreeLLM):
 
 class Queries(BaseModel):
     queries: list[str]
+
+
+class QuickPlayer(BaseModel):
+    name: str
+    club: str
+    league: str
+    position: list[str] = []
+    date_of_birth: Optional[str] = None
+    nationality: Optional[str] = None
+    foot: Optional[str] = None
+    height_cm: Optional[int] = None
+    market_value_eur: Optional[float] = None
+    contract_until: Optional[str] = None
+    minutes_this_season: Optional[int] = None
+    stats_line: str = "NO DATA"
+    why_fits: str = ""
+    profile_url: Optional[str] = None
+    source_urls: list[str] = []
+    data_quality: Literal["Good", "Thin", "Very thin"] = "Thin"
+    signal: SIGNALS = "🟡 Monitor"
+
+
+class QuickList(BaseModel):
+    players: list[QuickPlayer]
+    search_notes: str = ""
+
+
+POS_WORDS = {"GK": "goalkeeper", "CB": "centre-back", "RB": "right-back", "LB": "left-back",
+             "RWB": "right wing-back", "LWB": "left wing-back", "DM": "defensive midfielder",
+             "CM": "central midfielder", "AM": "attacking midfielder", "RW": "right winger",
+             "LW": "left winger", "SS": "second striker", "ST": "striker"}
+
+
+def quick_queries(f: SearchFilters) -> list[str]:
+    """Search queries built from the filters. No AI call needed."""
+    year = dt.date.today().year
+    pos = " ".join(dict.fromkeys(POS_WORDS.get(p, p) for p in f.positions[:2])) or "player"
+    young = f"under {f.age_max + 1}" if f.age_max else ""
+    lower = "second division" if f.only_lower_leagues else ""
+    q = []
+    if f.description.strip():
+        q.append(re.sub(r"\s+", " ", f.description.strip())[:140] + " transfermarkt")
+    for lg in (f.leagues or [""])[:3]:
+        q.append(f"best {young} {pos} {lg} {lower} {year} stats".replace("  ", " ").strip())
+    q.append(f"{lg if f.leagues else ''} {pos} {young} transfermarkt market value {year}".strip())
+    if f.nationalities:
+        q.append(f"{f.nationalities[0]} {pos} {young} prospects {year}")
+    return list(dict.fromkeys(x for x in q if x))[:5]
+
+
+def _quick_task(f: SearchFilters, n: int) -> str:
+    return f"""Today is {dt.date.today().isoformat()}.
+List the {n} BEST real players who pass the filters below, ranked by their stats for that
+role this season (goals/assists per 90 for attackers, the most relevant numbers for other
+positions, with minutes so the sample is clear). Best first. Use ONLY what the sources say.
+Drop anyone who clearly fails a hard filter. If fewer than {n} pass, return fewer.
+For each: profile fields you can find, a one-line stats_line with per-90 numbers and minutes,
+why_fits (one sentence), profile_url and source_urls (only URLs from the sources),
+data_quality, signal ("🟢 Watch now" strong numbers and enough minutes, "🟡 Monitor"
+mixed or thin data, "🔴 Skip" clearly weak).
+
+{f.describe()}"""
+
+
+def quick_to_brief(q: QuickPlayer, read: Optional[list[str]] = None) -> PlayerBrief:
+    ok = set(read) if read is not None else None
+    srcs = [u for u in q.source_urls + ([q.profile_url] if q.profile_url else [])
+            if valid_url(u) and (ok is None or u in ok)]
+    srcs = list(dict.fromkeys(srcs))
+    pos = [p for p in q.position if p in POS_WORDS]
+    foot = (q.foot or "").strip().capitalize() or None
+    foot = foot if foot in ("Left", "Right", "Both") else None
+    found = []
+    for u in srcs:
+        h = u.lower()
+        for k, v in (("transfermarkt", "Transfermarkt"), ("fotmob", "FotMob"), ("sofascore", "Sofascore"),
+                     ("ogol", "Ogol"), ("wikipedia", "Wikipedia")):
+            if k in h and v not in found:
+                found.append(v)
+    return PlayerBrief(
+        name=q.name, club=q.club, league=q.league, position=pos, nationality=q.nationality,
+        foot=foot, date_of_birth=q.date_of_birth, height_cm=q.height_cm, contract_until=q.contract_until,
+        market_value_eur=q.market_value_eur, value_source=srcs[0] if srcs else None,
+        minutes_this_season=q.minutes_this_season, found_in=found or ["Other"],
+        stats_line=q.stats_line, stats_source=srcs[0] if srcs else None, criteria_check=[],
+        strengths=[], risks=[], watch_on_video=[], data_quality=q.data_quality,
+        data_gaps="Quick search: open the player and press Deep research for strengths, risks and what to watch.",
+        signal=q.signal, signal_reason=q.why_fits, all_sources=srcs,
+        profile_links=[u for u in srcs if any(k in u for k in ("transfermarkt", "fotmob", "sofascore", "ogol"))],
+        deep=False)
+
+
+def quick_search(client, f: SearchFilters, n: int) -> list[PlayerBrief]:
+    """Default search: one web read + ONE AI call for the whole list."""
+    if is_free(client):
+        notes, read = gather(quick_queries(f), client.budget, per_query=6, max_pages=10)
+        if not notes:
+            raise RuntimeError("Web search returned nothing. DuckDuckGo may be rate-limiting: "
+                               "wait a minute and try again.")
+        ql = client.ask(f"{_quick_task(f, n)}\n\n<sources>\n{notes}\n</sources>", QuickList)
+        return [quick_to_brief(q, read) for q in ql.players[:n]]
+    notes = research(client, _quick_task(f, n) + "\nUse Transfermarkt, FotMob, Sofascore, Ogol and "
+                     "league stats pages. Give URLs.", max_uses=10)
+    ql = structure(client, notes, QuickList, f"Extract up to {n} ranked players.")
+    return [quick_to_brief(q) for q in ql.players[:n]]
 
 
 def clean_sources(b: PlayerBrief, read: list[str], notes: str = "") -> PlayerBrief:
@@ -617,9 +841,16 @@ List all source URLs at the end.""")
 
 
 def run_search(client, f: SearchFilters, top: int = 5, players: Optional[list[str]] = None,
-               on_step=None) -> list[PlayerBrief]:
-    """Full pipeline. on_step(text) is called before each stage."""
+               on_step=None, deep: bool = False) -> list[PlayerBrief]:
+    """Quick by default: one AI call for the ranked list. deep=True (or named players)
+    also builds a full brief per player. on_step(text) is called before each stage."""
     step = on_step or (lambda t: log(t))
+    if not players and not deep:
+        step("Searching free databases and ranking players by their stats (one AI request)")
+        briefs = quick_search(client, f, top)
+        if not briefs:
+            raise RuntimeError("No players passed the filters. Try wider filters.")
+        return briefs
     if players:
         targets = [(p, "") for p in players]
     else:
@@ -910,8 +1141,9 @@ def main() -> None:
     g.add_argument("--criteria", help='e.g. "G+A/90 >= 0.4; dribble success >= 50%%"')
     g.add_argument("--must-haves", help='e.g. "pace in transition, presses"')
     ap.add_argument("--player", help="skip discovery: brief these players (comma separated)")
-    ap.add_argument("--top", type=int, default=5)
-    ap.add_argument("--provider", choices=["gemini", "ollama", "claude"],
+    ap.add_argument("--top", type=int, default=10)
+    ap.add_argument("--deep", action="store_true", help="full brief for every player (1 AI request each)")
+    ap.add_argument("--provider", choices=["gemini", "groq", "ollama", "claude"],
                     help="AI provider (default gemini free tier; env SCOUT_PROVIDER)")
     ap.add_argument("--notion", action="store_true", help="add the players to your Notion Watchlist")
     ap.add_argument("--save", default="watchlist.json")
@@ -938,7 +1170,7 @@ def main() -> None:
             min_height_cm=a.min_height, contract_ends_by=a.contract_by,
             criteria=a.criteria or "", must_haves=a.must_haves or "")
         log("\n" + f.describe() + "\n")
-        briefs = run_search(make_client(), f, a.top, _csv(a.player))
+        briefs = run_search(make_client(), f, a.top, _csv(a.player), deep=a.deep)
         with open(a.save, "w", encoding="utf-8") as fh:
             json.dump({"filters": f.model_dump(), "briefs": [b.model_dump() for b in briefs]},
                       fh, ensure_ascii=False, indent=2)

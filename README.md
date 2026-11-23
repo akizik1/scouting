@@ -35,9 +35,9 @@ Tip: make a desktop shortcut. macOS: right-click → *Make Alias*. Windows: righ
 
 1. Describe the player in your own words at the top ("Left winger under 21, left-footed, under €500k, lower divisions in Brazil, speaks Portuguese"). That is enough to search.
 2. Optional: narrow it with the filters below, all on one screen (position, age, budget, leagues, top / + lower / only lower divisions, nationality, languages spoken, foot, height, contract, minutes, stat thresholds, style). **＋ Add filter** lets you type your own (e.g. "EU passport").
-3. Pick how many players to show: top 5, 10 (default) or 15. Press **Find players**. Progress shows step by step.
+3. Pick how many players to show: top 5, 10 (default) or 15. Press **Find players**. The quick search reads the free databases and ranks the players who pass by their stats, with **one AI request** for the whole list (about 1–2 minutes).
 4. Read the cards. Filter by signal, sort by age, price or data quality.
-5. Click a player for the profile: details, career (clubs and years), a market value chart when a source lists the history, player pages (Transfermarkt, FotMob, Sofascore) and public contacts (agent, club website, email, phone). Contacts are shown only when a public page lists them, never guessed.
+5. Click a player for the profile. Press **🔬 Deep research** there (or on the card) to read match reports, blogs and forums for that one player: strengths, risks, what to watch on video, career and contacts. One AI request per player, only when you ask. The profile shows: details, career (clubs and years), a market value chart when a source lists the history, player pages (Transfermarkt, FotMob, Sofascore) and public contacts (agent, club website, email, phone). Contacts are shown only when a public page lists them, never guessed.
 6. **＋ Watchlist** sends that player to Notion; **Add all 🟢** sends every *Watch now* player. **Report** downloads the list as Markdown.
 7. Every search is saved. Open old ones from **Saved searches**.
 
@@ -69,7 +69,8 @@ python scout_finder.py --from-json watchlist.json --notion   # add a saved list 
 
 | Provider | Cost | Setup | Notes |
 |---|---|---|---|
-| **Google Gemini** (default) | Free tier | Free key from aistudio.google.com/apikey | Picks a Flash-Lite model automatically. Rate limits apply (per minute and per day), enough for a few dozen player briefs a day. When the limit is hit, the app waits and retries. **On the free tier Google may use your prompts and answers to improve its products, and human reviewers may read them.** Don't put private information in the filters. |
+| **Google Gemini** (default) | Free tier | Free key from aistudio.google.com/apikey | Picks a Flash-Lite model automatically. Each free model has its own daily limit, so when one runs out the app moves to the next (Flash-Lite → Flash → Gemma). It also spaces requests out to stay under the per-minute limit. A quick search is one request, so you can do many searches a day. **On the free tier Google may use your prompts and answers to improve its products, and human reviewers may read them.** Don't put private information in the filters. |
+| **Groq** (free backup) | Free tier | Free key from console.groq.com/keys | Add it next to the Gemini key. When Gemini's free limit runs out, the app switches to Groq automatically. Shorter source text per request. |
 | **Ollama** | Free, offline | Install ollama.com, then `ollama pull qwen3:8b` | Runs on your computer, nothing leaves it except the web searches. Slower, needs about 16 GB RAM. Smaller models make more mistakes. |
 | **Claude** | Paid (Anthropic API) | console.anthropic.com key | Reads more sources with its own web search, best briefs. Roughly $1–3 for a 5-player search. |
 

@@ -228,6 +228,8 @@ main{display:block;max-width:1440px;margin:0 auto;padding:16px 28px 60px}
 .linkchips a{background:#5aa9ff14;border:1px solid #5aa9ff44;border-radius:999px;padding:5px 12px;font-weight:600;font-size:12.5px}
 .chart svg{width:100%;height:auto;display:block}
 .none{color:var(--dim);font-size:13px}
+.quicknote{margin:12px 18px 4px;padding:10px 12px;border:1px dashed var(--line2);border-radius:10px;font-size:12.5px;color:var(--muted);display:flex;gap:10px;align-items:center;justify-content:space-between}
+.deepbar{display:flex;gap:10px;align-items:center;padding:12px 14px;border-radius:12px;background:#3ddc8410;border:1px solid #3ddc8440;font-size:13px}
 </style>
 </head>
 <body>
@@ -320,7 +322,7 @@ main{display:block;max-width:1440px;margin:0 auto;padding:16px 28px 60px}
         <button class="chip" data-s="y">🟡 Monitor <span id="cY"></span></button>
         <button class="chip" data-s="r">🔴 Skip <span id="cR"></span></button>
         <div class="sp"></div>
-        <select id="sortSel"><option value="signal">Sort: signal</option><option value="age">Sort: youngest</option><option value="value">Sort: cheapest</option><option value="data">Sort: best data</option></select>
+        <select id="sortSel"><option value="rank">Sort: best stats</option><option value="signal">Sort: signal</option><option value="age">Sort: youngest</option><option value="value">Sort: cheapest</option><option value="data">Sort: best data</option></select>
       </div>
       <div class="grid" id="cards"></div>
     </div>
@@ -339,13 +341,17 @@ main{display:block;max-width:1440px;margin:0 auto;padding:16px 28px 60px}
     <label>AI provider</label>
     <select id="sProv">
       <option value="gemini">Google Gemini · free tier (recommended)</option>
+      <option value="groq">Groq · free tier</option>
       <option value="ollama">Ollama · free, runs on this computer</option>
       <option value="claude">Claude · paid, best quality</option>
     </select>
-    <div data-prov="gemini">
+    <div data-prov="gemini groq">
       <label>Gemini API key <span style="color:var(--red)">*</span></label>
       <input type="password" id="sGemini" placeholder="AIza…">
       <div class="hint">Free, no card: aistudio.google.com/apikey → Create API key. Free-tier limits apply (a few dozen searches a day), and Google may use free-tier prompts to improve its products.</div>
+      <label>Groq API key <span style="color:var(--dim);font-weight:500">(free backup, recommended)</span></label>
+      <input type="password" id="sGroq" placeholder="gsk_…">
+      <div class="hint">Free, no card: console.groq.com/keys → Create API Key. Used automatically when the Gemini free limit runs out.</div>
     </div>
     <div data-prov="ollama">
       <label>Ollama model</label>
@@ -427,8 +433,8 @@ function setSeg(id, attr, v){ $$(id+" button").forEach(b=>b.classList.toggle("on
 seg("#footSeg","f", v=>foot=v);
 seg("#lowerSeg","l", v=>lower=v);
 seg("#topSeg","t", v=>{ topN=+v; eta(); });
-function eta(){ const n = $("#fPlayers").value.split(",").filter(x=>x.trim()).length || topN;
-  $("#eta").textContent = `≈ ${Math.max(1,Math.round(n*0.6))}–${Math.max(2,n)} min`; }
+function eta(){ const n = $("#fPlayers").value.split(",").filter(x=>x.trim()).length;
+  $("#eta").textContent = n ? `≈ ${n}–${n*2} min` : "≈ 1–2 min"; }
 
 $$("#formPanel input, #formPanel select").forEach(el=>{ el.addEventListener("input", ()=>{ count(); eta(); }); el.addEventListener("change", count); });
 $("#fDesc").onkeydown = e => { if(e.key==="Enter" && (e.ctrlKey||e.metaKey)) $("#runBtn").click(); };
@@ -467,16 +473,16 @@ async function loadSettings(){
   settings = await api("/api/settings");
   $("#keyDot").classList.toggle("ok", settings.ready); $("#folder").textContent = settings.folder;
   $("#sKey").value = settings.anthropic_key; $("#sNotion").value = settings.notion_token; $("#sModel").value = settings.model || "claude-opus-5-5";
-  $("#sProv").value = settings.provider || "gemini"; $("#sGemini").value = settings.gemini_key || "";
+  $("#sProv").value = settings.provider || "gemini"; $("#sGemini").value = settings.gemini_key || ""; $("#sGroq").value = settings.groq_key || "";
   $("#sOllamaModel").value = settings.ollama_model || ""; $("#sOllamaUrl").value = settings.ollama_url || ""; showProv();
   $("#pushBtn").classList.toggle("hidden", !settings.notion_ready); renderCards();
 }
-function showProv(){ $$("[data-prov]").forEach(d => d.classList.toggle("hidden", d.dataset.prov !== $("#sProv").value)); }
+function showProv(){ $$("[data-prov]").forEach(d => d.classList.toggle("hidden", !d.dataset.prov.split(" ").includes($("#sProv").value))); }
 $("#sProv").onchange = showProv;
 $("#setBtn").onclick = () => $("#setVeil").classList.remove("hidden");
 $("#setCancel").onclick = () => $("#setVeil").classList.add("hidden");
 $("#setSave").onclick = async () => {
-  await api("/api/settings", {provider:$("#sProv").value, gemini_key:$("#sGemini").value, ollama_model:$("#sOllamaModel").value, ollama_url:$("#sOllamaUrl").value, anthropic_key:$("#sKey").value, notion_token:$("#sNotion").value, model:$("#sModel").value});
+  await api("/api/settings", {provider:$("#sProv").value, gemini_key:$("#sGemini").value, groq_key:$("#sGroq").value, ollama_model:$("#sOllamaModel").value, ollama_url:$("#sOllamaUrl").value, anthropic_key:$("#sKey").value, notion_token:$("#sNotion").value, model:$("#sModel").value});
   $("#setVeil").classList.add("hidden"); toast("Settings saved"); await loadSettings();
 };
 
@@ -521,8 +527,8 @@ $("#runBtn").onclick = async () => {
     $("#runBtn").disabled = true; $("#runErr").classList.add("hidden"); $("#spin").classList.remove("hidden");
     $("#steps").innerHTML=""; $("#barFill").style.width="0"; view("#vRun");
     $("#results").scrollIntoView({behavior:"smooth", block:"start"});
-    const n = players.split(",").filter(x=>x.trim()).length || topN;
-    poll(r.job, j => { if(j.status==="done") showResults({filters:j.filters, briefs:j.briefs, file:j.file}); }, n + 2);
+    const n = players.split(",").filter(x=>x.trim()).length;
+    poll(r.job, j => { if(j.status==="done") showResults({filters:j.filters, briefs:j.briefs, file:j.file}); }, n ? n + 2 : 2);
   }catch(e){ toast(e.message); }
 };
 
@@ -565,6 +571,7 @@ function card(b,i){
       <div class="reason">${esc(b.signal_reason)}</div>
     </div>
     <div class="stats"><b>Stats</b>${esc(b.stats_line)} ${okUrl(b.stats_source)?`<a class="src" href="${esc(b.stats_source)}" target="_blank" rel="noopener">source ↗</a>`:""}</div>
+    ${b.deep===false ? `<div class="quicknote">Strengths, risks and what to watch on video: <button class="addbtn" data-deep="${esc(b.name)}">🔬 Deep research</button></div>` : `
     <div class="cols">
       <div><h4>✅ Strengths</h4>${(b.strengths||[]).slice(0,3).map(claimHtml).join("")||'<div class="claim" style="color:var(--dim)">No reliable claims found.</div>'}</div>
       <div><h4>⚠️ Risks</h4>${(b.risks||[]).slice(0,3).map(claimHtml).join("")||'<div class="claim" style="color:var(--dim)">No reliable claims found.</div>'}</div>
@@ -573,7 +580,7 @@ function card(b,i){
     <details><summary>Filter check & data gaps</summary>
       <ul>${(b.criteria_check||[]).map(c=>`<li>${esc(c)}</li>`).join("")}</ul>
       <div style="font-size:12.5px;color:#c3cfdd;margin-bottom:8px"><b style="color:var(--muted)">Missing:</b> ${esc(b.data_gaps||"—")}</div>
-    </details>
+    </details>`}
     <div class="foot"><span>${nextStep(b)}</span><span class="sp"></span>${watchBtn(b)}</div>
   </article>`;
 }
@@ -622,22 +629,39 @@ function openProfile(name){
     </div><div class="reason" style="margin-top:12px">${esc(b.signal_reason)}</div></div>
     <div class="psec"><h4>Experience</h4>${career.length ? career.map((c,i)=>`<div class="exp ${i===0&&!c.to_year?"now":""}"><div class="ico">${esc(c.club.split(/\s+/).map(w=>w[0]).slice(0,2).join("").toUpperCase())}</div>
       <div><b>${esc(c.club)}${c.loan?" <span>(loan)</span>":""}</b><span>${esc(c.from_year||"?")} – ${esc(c.to_year||"now")}${c.apps!=null?" · "+c.apps+" apps":""}${c.goals!=null?" · "+c.goals+" goals":""}</span></div></div>`).join("")
-      : `<div class="none">No career history found in public sources.</div>`}</div>
+      : `<div class="none">${b.deep===false?"Press Deep research to load the career.":"No career history found in public sources."}</div>`}</div>
     ${chart?`<div class="psec chart"><h4>Market value</h4>${chart}${okUrl(b.value_history_source)?`<a class="src" href="${esc(b.value_history_source)}" target="_blank" rel="noopener">source ↗</a>`:""}</div>`:""}
     <div class="psec"><h4>Player pages</h4>${links.length?`<div class="linkchips">${links.map(u=>`<a href="${esc(u)}" target="_blank" rel="noopener">${esc(siteName(u))} ↗</a>`).join("")}</div>`:`<div class="none">No profile pages found.</div>`}</div>
-    <div class="psec contact"><h4>Contact</h4>${contact || `<div class="none">No public agent or club contact found. Try the club's official website or the player's Transfermarkt page.</div>`}
+    <div class="psec contact"><h4>Contact</h4>${contact || `<div class="none">${b.deep===false?"Press Deep research to look for the agent and club contact.":"No public agent or club contact found."} ${b.deep===false?"":" Try the club's official website or the player's Transfermarkt page."}</div>`}
       ${okUrl(b.contact_source)?`<div class="hint">Source: <a href="${esc(b.contact_source)}" target="_blank" rel="noopener">${esc(host(b.contact_source))}</a></div>`:""}</div>
+    ${b.deep===false ? `<div class="psec"><h4>Scouting brief</h4><div class="deepbar"><span style="flex:1">This is a quick result from the stats. Deep research reads match reports, blogs and forums for strengths, risks, career, contacts and what to watch (1 AI request, about a minute).</span><button class="addbtn" data-deep="${esc(b.name)}">🔬 Deep research</button></div></div>` : `
     <div class="psec"><h4>Scouting brief</h4><div class="cols" style="padding:0">
       <div><h4>✅ Strengths</h4>${(b.strengths||[]).map(claimHtml).join("")||'<div class="none">None found.</div>'}</div>
       <div><h4>⚠️ Risks</h4>${(b.risks||[]).map(claimHtml).join("")||'<div class="none">None found.</div>'}</div></div>
-      <div class="hint" style="margin-top:6px">${nextStep(b)}</div></div>`;
+      <div class="hint" style="margin-top:6px">${nextStep(b)}</div></div>`}`;
   $("#pDrawer").scrollTop=0; $("#pDrawer").classList.remove("hidden"); $("#pVeil").classList.remove("hidden");
   $("#pClose").onclick = closeProfile;
+}
+async function deepResearch(name, btn){
+  const b = current.briefs.find(x=>x.name===name); if(!b) return;
+  $$(`[data-deep="${CSS.escape(name)}"]`).forEach(el=>{ el.disabled=true; el.textContent="Researching… ~1 min"; });
+  try{
+    const r = await api("/api/deep", {brief:b, filters:current.filters, file:current.file});
+    const t = setInterval(async () => {
+      const j = await api("/api/job/" + r.job);
+      if(j.status === "running") return; clearInterval(t);
+      if(j.status === "error"){ toast(j.error); renderCards(); if(!$("#pDrawer").classList.contains("hidden")) openProfile(name); return; }
+      const i = current.briefs.findIndex(x=>x.name===name); current.briefs[i] = j.brief;
+      renderCards(); if(!$("#pDrawer").classList.contains("hidden")) openProfile(name);
+      toast(`${name}: full brief ready`);
+    }, 1500);
+  }catch(e){ toast(e.message); renderCards(); }
 }
 function closeProfile(){ $("#pDrawer").classList.add("hidden"); $("#pVeil").classList.add("hidden"); }
 $("#pVeil").onclick = closeProfile;
 document.addEventListener("keydown", e => { if(e.key==="Escape") closeProfile(); });
-$("#pDrawer").onclick = e => { const b=e.target.closest("[data-add]"); if(b) addToNotion([b.dataset.add]); };
+$("#pDrawer").onclick = e => { const d=e.target.closest("[data-deep]"); if(d) return deepResearch(d.dataset.deep);
+  const b=e.target.closest("[data-add]"); if(b) addToNotion([b.dataset.add]); };
 
 function watchBtn(b){
   if(!settings.notion_ready) return "";
@@ -660,13 +684,14 @@ async function addToNotion(names){
     }, 700);
   }catch(e){ toast(e.message); renderCards(); }
 }
-$("#cards").onclick = e => { const b=e.target.closest("[data-add]"); if(b) return addToNotion([b.dataset.add]);
+$("#cards").onclick = e => { const d=e.target.closest("[data-deep]"); if(d) return deepResearch(d.dataset.deep);
+  const b=e.target.closest("[data-add]"); if(b) return addToNotion([b.dataset.add]);
   if(e.target.closest("a")) return; const o=e.target.closest("[data-open]"); if(o) openProfile(o.dataset.open); };
 function renderCards(){
   if(!current) return; let list=[...(current.briefs||[])];
   if(sigFilter!=="all") list=list.filter(b=>sigClass(b.signal)===sigFilter);
   const s=$("#sortSel").value, ord={"g":0,"y":1,"r":2}, dq={"Good":0,"Thin":1,"Very thin":2};
-  list.sort((a,b)=> s==="age" ? (age(a.date_of_birth)??99)-(age(b.date_of_birth)??99)
+  if(s!=="rank") list.sort((a,b)=> s==="age" ? (age(a.date_of_birth)??99)-(age(b.date_of_birth)??99)
     : s==="value" ? (a.market_value_eur??9e12)-(b.market_value_eur??9e12)
     : s==="data" ? (dq[a.data_quality]??3)-(dq[b.data_quality]??3) : ord[sigClass(a.signal)]-ord[sigClass(b.signal)]);
   $("#cards").innerHTML = list.length ? list.map(card).join("") : `<div class="panel empty-note">No players here.</div>`;

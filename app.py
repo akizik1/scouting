@@ -43,7 +43,7 @@ def load_settings() -> dict:
 
 def save_settings(new: dict) -> None:
     cur = load_settings()
-    for k in ("provider", "gemini_key", "ollama_url", "ollama_model",
+    for k in ("provider", "gemini_key", "groq_key", "ollama_url", "ollama_model",
               "anthropic_key", "notion_token", "model"):
         if k not in new:
             continue
@@ -67,6 +67,8 @@ def apply_settings() -> None:
     sf.PROVIDER = s.get("provider") or os.getenv("SCOUT_PROVIDER") or "gemini"
     if s.get("gemini_key"):
         os.environ["GEMINI_API_KEY"] = s["gemini_key"]
+    if s.get("groq_key"):
+        os.environ["GROQ_API_KEY"] = s["groq_key"]
     sf.OLLAMA_URL = s.get("ollama_url") or os.getenv("OLLAMA_URL") or "http://localhost:11434"
     sf.OLLAMA_MODEL = s.get("ollama_model") or os.getenv("OLLAMA_MODEL") or "qwen3:8b"
     if s.get("anthropic_key"):
@@ -82,7 +84,8 @@ def provider_ready(s: dict) -> bool:
         return bool(s.get("anthropic_key") or os.getenv("ANTHROPIC_API_KEY"))
     if prov == "ollama":
         return True
-    return bool(s.get("gemini_key") or os.getenv("GEMINI_API_KEY"))
+    return bool(s.get("gemini_key") or os.getenv("GEMINI_API_KEY")
+                or s.get("groq_key") or os.getenv("GROQ_API_KEY"))
 
 
 def mask(v: str | None) -> str:
@@ -137,8 +140,7 @@ def run_search(job: dict, payload: dict) -> None:
     try:
         with RUN_LOCK:
             if not provider_ready(load_settings()):
-                raise RuntimeError("Add your free Gemini API key in Settings first "
-                                   "(or pick Ollama / Claude).")
+                raise RuntimeError("Add your free Gemini (or Groq) API key in Settings first.")
             f = filters_from_payload(payload.get("filters", {}))
             job["filters"] = f.model_dump()
             top = max(1, min(int(payload.get("top") or 10), 15))
@@ -158,6 +160,37 @@ def run_search(job: dict, payload: dict) -> None:
         for s in job["steps"]:
             if s["state"] == "run":
                 s["state"] = "fail"
+    finally:
+        sf.LOG_HOOK = None
+
+
+def run_deep(job: dict, payload: dict) -> None:
+    """Full brief for ONE player (strengths, risks, video, contacts, career), on demand."""
+    sf.LOG_HOOK = lambda msg: job["log"].append(msg)
+    try:
+        with RUN_LOCK:
+            old = sf.PlayerBrief(**payload["brief"])
+            f = sf.SearchFilters(**(payload.get("filters") or {}))
+            step(job, f"Reading match reports, blogs and forums · {old.name}")
+            new = sf.brief_player(sf.make_client(), f, old.name, old.club)
+            for k, v in old.model_dump().items():   # keep quick-search facts the deep pass missed
+                if getattr(new, k) in (None, [], "") and v not in (None, [], ""):
+                    setattr(new, k, v)
+            new.deep = True
+            job["brief"] = new.model_dump()
+            fn = payload.get("file")
+            if fn:
+                path = RESULTS_DIR / Path(fn).name
+                if path.exists():
+                    d = json.loads(path.read_text(encoding="utf-8"))
+                    d["briefs"] = [job["brief"] if b.get("name") == old.name else b for b in d["briefs"]]
+                    path.write_text(json.dumps(d, ensure_ascii=False, indent=2), encoding="utf-8")
+            step(job, "Brief ready", "done")
+            job["status"] = "done"
+    except Exception as e:
+        job["status"] = "error"
+        job["error"] = str(e)
+        job["log"].append(traceback.format_exc())
     finally:
         sf.LOG_HOOK = None
 
@@ -213,6 +246,7 @@ class Handler(BaseHTTPRequestHandler):
             s = load_settings()
             self._json({"provider": s.get("provider") or sf.PROVIDER,
                         "gemini_key": mask(s.get("gemini_key")),
+                        "groq_key": mask(s.get("groq_key")),
                         "ollama_url": s.get("ollama_url") or sf.OLLAMA_URL,
                         "ollama_model": s.get("ollama_model") or sf.OLLAMA_MODEL,
                         "anthropic_key": mask(s.get("anthropic_key")),
@@ -258,6 +292,14 @@ class Handler(BaseHTTPRequestHandler):
                 return self._json({"error": "A search is already running."}, 409)
             job = new_job("search")
             threading.Thread(target=run_search, args=(job, data), daemon=True).start()
+            self._json({"job": job["id"]})
+        elif p == "/api/deep":
+            if RUN_LOCK.locked():
+                return self._json({"error": "Another search is running. Try again in a moment."}, 409)
+            if not data.get("brief"):
+                return self._json({"error": "No player."}, 400)
+            job = new_job("deep")
+            threading.Thread(target=run_deep, args=(job, data), daemon=True).start()
             self._json({"job": job["id"]})
         elif p == "/api/push":
             briefs = data.get("briefs") or []
